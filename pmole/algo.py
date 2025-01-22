@@ -73,7 +73,9 @@ class LZWDictionary:
     The dictionary's representation looks like this:
         >>> {
             "header": ["value", "count", "position_in_data"],
-            0: "x"
+            0: [...],
+            1: [...],
+            ...
         }
     """
     keys: list
