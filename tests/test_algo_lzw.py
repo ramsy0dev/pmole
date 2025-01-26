@@ -1,24 +1,22 @@
-
 from pmole.algo import LZW
-
 
 
 def test_algo_lzw() -> None:
     """
     Test the LZW algorithm
     """
-    text_data = open("./data/test_file_10kb_words.txt", "r", encoding="utf-8").read()
+    text_data = "hello there 123 world fire [cold] @cold im cold" \
+        "world on fire i love love 123 not love hello hello there" \
+            "world fire cold cold im cold 123 world on fire i love love not love hello"
 
     lzw = LZW()
-    data = text_data
 
-    print(data)
     compressed_data = lzw.compress(
-        data=data
+        data=text_data
     )
 
     decompressed_data = lzw.decompress(
         compressed_data=compressed_data
     )
 
-    # assert text_data == compressed_data
+    assert decompressed_data == text_data
