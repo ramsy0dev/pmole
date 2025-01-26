@@ -52,6 +52,7 @@ def compress(
 
     pmole.compress(
         file_path=file_path,
+        directory_path=directory_path,
         threads=threads
     )
 
