@@ -27,7 +27,6 @@ from pathlib import Path
 
 from pmole.globals import logger
 
-
 # Stubs
 class Nodes: ...
 
