@@ -66,7 +66,7 @@ class Pmole:
             files = [FileHandler(file_path), ]
         
         file_structure = self.generate_file_structure(
-            files_paths=[file.file_path for file in files]
+            files_paths=[file_path for file_path in files_paths]
         )
 
         output_data: list[list[int]] = list()
@@ -107,7 +107,7 @@ class Pmole:
 
         root_node_data = []
         for file_path in files_paths:
-            root_node_data.append(f":: {Path(file_path).name}\n")
+            root_node_data.append(f":: {file_path}\n")
          
         root_node.data = root_node_data
 
@@ -126,14 +126,16 @@ class Pmole:
         output_data: list = list()
 
         for i in range(len(compressed_data)):
-            output_data.append(file_structure.data[i])
+            output_data.append(
+                "\n" + "\n" + file_structure.data[i] if i != 0 else file_structure.data[i]
+            )
+
             line_length = 0
-            
             if len(compressed_data[i]) < 80:
                 line_length = int(len(compressed_data[i])/8)
             else:
                 line_length = int(len(compressed_data[i])/12)
-            
+
             buffer = []
 
             for _ in range(len(compressed_data[i])):
@@ -143,8 +145,9 @@ class Pmole:
                     buffer = []
                 else:
                     buffer.append(str(token))
-                    if len(compressed_data[i]) == _:
+                    if len(compressed_data[i]) == _: # <- Last token in the compressed data
                         output_data.append("\n" + " ".join(buffer))
 
-            return "".join(output_data)
+        
+        return "".join(output_data)
     
