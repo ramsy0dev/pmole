@@ -13,7 +13,12 @@ loguru = "^0.7.3"
 typer = "^0.15.1"
 pytest = "^8.3.4"
 beautifultable = "^1.1.0"
+chardet = "^5.2.0"
+charset-normalizer = "^3.4.1"
 
+
+[tool.poetry.group.dev.dependencies]
+debugpy = "^1.8.12"
 
 [build-system]
 requires = ["poetry-core"]
@@ -32,4 +37,3 @@ dev = [
 # you can then decide which rules you want to disable
 typeCheckingMode = "standard"
 reportMissingSuperCall = false
-
