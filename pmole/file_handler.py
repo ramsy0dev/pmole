@@ -39,10 +39,20 @@ class FileHandler:
             size = Path(self.file_path).__sizeof__()
             chunks = int(size/threads)
         
-        with open(self.file_path, "rb") as f:
+        with open(self.file_path, "r", encoding="utf-8") as f:
             while buffer:= f.read(chunks):
                 yield buffer
     
+    def write(self, data: str) -> None:
+        """
+        Write to the file.
+        """
+        with open(self.file_path, "w", encoding="utf-8") as o:
+            o.write(data)
+        
+    def detect_file_encoding(self) -> str: ...
     def next_at(self) -> None: ...
 
-    def close(self) -> None: ...
+    def close(self) -> None:
+        self.file_r.close()
+        self.file_w.close()
