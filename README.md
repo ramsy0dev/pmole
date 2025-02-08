@@ -90,7 +90,7 @@ And the decompressed data is:
 He stared out the window at the snowy field. He'd been stuck in the house for close to a month and his only view of the outside world was through the window. There wasn't much to see. It was mostly just the field with an occasional bird or small animal who ventured into the field. As he continued to stare out the window, he wondered how much longer he'd be shackled to the steel bar inside the house
 ```
 
-every file path starts with `**` while the compressed data of that file starts with `--`, the end of the compressed data is marked by `[EOF]`, that's where the pmole stops adding tokens to the buffer and decompresses it.
+every file path starts with `::` while the compressed data of that file starts with `--`, the end of the compressed data is marked by `[EOF]`, that's where the pmole stops adding tokens to the buffer and decompresses it.
 
 # LICENSE
 
