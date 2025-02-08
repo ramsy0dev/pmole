@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "pmole"
 version = "0.1.0"
-description = "Restore data from a single .cm file"
+description = "Restore data from a single .pm file"
 authors = ["ramsy0dev"]
 license = "MIT"
 readme = "README.md"
@@ -13,8 +13,6 @@ loguru = "^0.7.3"
 typer = "^0.15.1"
 pytest = "^8.3.4"
 beautifultable = "^1.1.0"
-chardet = "^5.2.0"
-charset-normalizer = "^3.4.1"
 
 
 [tool.poetry.group.dev.dependencies]
