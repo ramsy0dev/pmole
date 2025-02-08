@@ -2,7 +2,7 @@
 # Introduction
 
 Pmole is a library for reproducing data from a single file.
-Pmole uses `.cm` file extension to create a "origin" file that will be used to reproduced the compressed data.
+Pmole uses `.cm` file extension to create an "origin" file that will be used to reproduce the compressed data.
 
 # Installation
 
