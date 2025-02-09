@@ -20,6 +20,35 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from loguru import logger
+__all__ = [
+    "PLATFORM",
+    "SLASH",
+    "HOME_DIRECTORY",
+    "ROOT_CONFIG_DIR",
+    "CACHE_DIR",
+    "DICTIONARY_CACHE_FILE_PATH",
+    "REVERSE_DICTIONARY_CACHE_FILE_PATH"
+]
 
-logger.add("pmole.log", rotation="10 MB")
+import os
+
+from pmole.utils import (
+    get_platform,
+    create_path,
+    PL_WINDOWS,
+    PL_LINUX
+)
+
+PLATFORM = get_platform()
+
+SLASH = "/" if PLATFORM == PL_LINUX else "\\"
+HOME_DIRECTORY = os.path.expanduser("~")
+
+if PLATFORM == PL_LINUX:
+    ROOT_CONFIG_DIR = f"{HOME_DIRECTORY}{SLASH}pmole"
+elif PLATFORM == PL_WINDOWS:
+    ROOT_CONFIG_DIR = f"{HOME_DIRECTORY}{SLASH}pmole"
+
+CACHE_DIR = ROOT_CONFIG_DIR + SLASH + "cache"
+DICTIONARY_CACHE_FILE_PATH = CACHE_DIR + SLASH + "pre_generated_dictionary.json"
+REVERSE_DICTIONARY_CACHE_FILE_PATH = CACHE_DIR + SLASH + "pre_generated_reverse_dictionary.json"
