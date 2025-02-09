@@ -20,7 +20,13 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+__all__ = [
+    "Pmole"
+]
+
 from pathlib import Path
+
+from pmole.globals import logger
 
 from pmole.convert import Convert
 
@@ -32,6 +38,7 @@ from pmole.algo import LZWDictionary
 
 # File handler
 from pmole.file_handler import FileHandler
+from pmole.file_handler import BY_LINE
 
 # Utils
 from pmole.utils import Nodes
@@ -48,7 +55,7 @@ class Pmole:
         self.lzw = LZW()
     
     @measure_time
-    def compress(self, file_path: str, directory_path: str | None = None, threads: int | None = 3) -> None:
+    def compress(self, file_path: str | None = None, directory_path: str | None = None, threads: int | None = 7) -> None:
         """
         Compress a file or a directory.
         """
@@ -61,10 +68,14 @@ class Pmole:
             files_paths = list_files_in_directory(
                 directory=directory_path
             )
+            
+            logger.info(f"Found {len(files_paths)} files.")
+
             files = [FileHandler(file_path) for file_path in files_paths]
         else:
             files = [FileHandler(file_path), ]
-        
+            files_paths = [file_path, ]
+
         file_structure = self.generate_file_structure(
             files_paths=[file_path for file_path in files_paths]
         )
@@ -72,10 +83,14 @@ class Pmole:
         output_data: list[list[int]] = list()
         
         for file in files:
+            logger.info(f"Compressing file `{file.file_path}`...")
+
             file_buffer = file.read(threads)
             compressed_data = self.lzw.compress(
-                data=file_buffer
+                data=file_buffer,
+                dictionary=dictionary
             )
+            
             output_data.append(compressed_data)
         
         if len(files_paths) > 1:
@@ -83,6 +98,8 @@ class Pmole:
         else:
             output_file_name = Path(file_path).name.split(".")[0] + ".pm"
         
+        logger.info("Constructing compress output file's data...")
+
         output_data = self.output_file_data(
             file_structure=file_structure,
             compressed_data=output_data
@@ -93,11 +110,64 @@ class Pmole:
             output_data
         )
 
+        logger.info(f"Compressing is done. output file is `{output_file_name}`.")
+
     def decompress(self, file_path: str, threads: int | None = 3) -> None:    
         """
         Decompress data
         """
-        pass
+        file = FileHandler(file_path=file_path)
+        files_paths: list[str] = list()
+        files: list[FileHandler] = list()
+        file_h: FileHandler | None = None
+
+        constructed_file_path = ""
+        constructed_compressed_file_data = list()
+
+        for buffer in file.read(threads=threads, mode=BY_LINE):
+            buffer = buffer.strip()
+            logger.debug(f"Current buffer: {buffer}")
+            logger.debug(f"Splited buffer: {buffer.split(' ')}")
+
+            if buffer[0:2] == "::":
+                constructed_file_path = buffer.replace(":: ", "").strip()
+                
+                logger.debug(f"Found file path `{constructed_file_path}`")
+
+                files_paths.append(
+                    constructed_file_path
+                )
+                file_h = FileHandler(file_path=constructed_file_path)
+                files.append(
+                    file_h
+                )
+                constructed_file_path = ""
+            
+            if buffer[0:2] == "--":
+                for i in buffer.split(" "):
+                    if i == "idx":
+                        continue
+                    
+                    if i == "--":
+                        continue
+
+                    if i == "[EOF]":
+                        logger.info(f"Decompressing file `{files[-1].file_path}`...")
+
+                        decompressed_file_data = self.lzw.decompress(
+                            compressed_data=constructed_compressed_file_data
+                        )
+                        logger.debug(f"Decompressed file data: {decompressed_file_data}")
+                        
+                        file_h.write(
+                            data=decompressed_file_data
+                        )
+
+                        constructed_compressed_file_data.clear()
+                        file_h = None
+                    else:
+                        logger.debug(f"Adding token `{i}` to `constructed_compressed_file_data`")
+                        constructed_compressed_file_data.append(int(i))
 
     def generate_file_structure(self, files_paths: str, directory_path: str | None = None) -> Nodes:
         """
@@ -119,35 +189,38 @@ class Pmole:
 
         return root_node
     
-    def output_file_data(self, file_structure: Nodes, compressed_data: list[list[int]], threads_n: int | None = 3) -> bytes:
+    def output_file_data(self, file_structure: Nodes, compressed_data: list[list[int]], threads_n: int | None = 7) -> bytes:
         """
-        convert the file structure into a file's data
+        Convert the file structure into a file's data.
         """
-        output_data: list = list()
+        output_data = []
+
+        logger.debug(f"Number of compressed file data: {len(compressed_data)}")
 
         for i in range(len(compressed_data)):
-            output_data.append(
-                "\n" + "\n" + file_structure.data[i] if i != 0 else file_structure.data[i]
-            )
-
-            line_length = 0
-            if len(compressed_data[i]) < 80:
-                line_length = int(len(compressed_data[i])/8)
+            if i == 0:
+                output_data.append(file_structure.data[i])
             else:
-                line_length = int(len(compressed_data[i])/12)
+                output_data.append("\n\n" + file_structure.data[i])
+            
+            line_length = int(len(compressed_data[i]) // 12)
+            buffer = ["--"]
+            
+            for index, token in enumerate(compressed_data[i]):
+                logger.debug(f"Current token: `{token}`")
+                buffer.append(str(token))
 
-            buffer = []
-
-            for _ in range(len(compressed_data[i])):
-                token = compressed_data[i][_]
+                # Write buffer when hitting line length
                 if len(buffer) == line_length:
                     output_data.append("\n" + " ".join(buffer))
-                    buffer = []
-                else:
-                    buffer.append(str(token))
-                    if len(compressed_data[i]) == _: # <- Last token in the compressed data
-                        output_data.append("\n" + " ".join(buffer))
+                    logger.debug(f"Output data:\n{output_data[-1]}")
+                    buffer = ["--"]  # Reset buffer
 
-        
+            # # Ensure last buffer is added
+            if len(buffer) > 1:
+                output_data.append("\n" + " ".join(buffer))
+            
+            # Indicate end of this file's compressed data
+            output_data.append(" [EOF]")
+
         return "".join(output_data)
-    
