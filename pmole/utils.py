@@ -20,22 +20,41 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
+__all__ = [
+    "Nodes",
+    "get_platform",
+    "measure_time",
+    "create_path",
+    "show_diff",
+    "split_data_to_batches",
+    "list_files_in_directory",
+    "replace_unsupported_characters"
+]
+
+import os
 import time
 import wcwidth
 
 from pathlib import Path
 
-from pmole.globals import logger
+from loguru import logger
+
+# Types
+PL_WINDOWS = 0
+PL_LINUX = 1
 
 # Stubs
 class Nodes: ...
 
+def get_platform() -> int: ...
 def measure_time(func: callable) -> None: ...
+def create_path(path: str) -> bool: ...
+def show_diff(d1, d2, file1: str, file2: str) -> str: ...
 def split_data_to_batches(data_n: int, k: int) -> list: ...
 def list_files_in_directory(directory: str) -> list[str]: ...
 def replace_unsupported_characters(input_string: str, placeholder: str = "?") -> str: ...
 
-# Implementations
+#Implementations
 class Nodes:
     """
     Node
@@ -50,6 +69,13 @@ class Nodes:
         self.prev = prev
         self.data = data
 
+def get_platform() -> int:
+    import platform
+    
+    plattype = platform.system()
+    
+    return PL_WINDOWS if plattype == "Windows" else PL_LINUX
+
 def measure_time(func: callable) -> None:
     """
     Mesure the time a function takes.
@@ -59,11 +85,60 @@ def measure_time(func: callable) -> None:
         result = func(self, *args, **kwargs)
         end_time = time.time()
         deff = end_time - start_time
+
         logger.debug(f"Function '{func.__name__}' took '{deff:.6f}' seconds")
 
         return result
     
     return wrapper
+
+def create_path(path: str) -> str:
+    """
+    Create a path
+    """
+    platform = get_platform()
+    slash = "/" if platform == PL_LINUX else "\\"
+    
+    dirs = path.split(slash)
+    
+    root_dir = os.getcwd()
+
+    logger.debug(f"Current working directory: {root_dir}")
+
+    last_dir = root_dir
+    
+    for i in range(len(dirs)):
+        print(f"{last_dir = }")
+        directory = ""
+        
+        if dirs[i] == "":
+            continue
+        
+        directory = last_dir + slash + dirs[i]
+        
+        logger.debug(f"Processing directory: `{directory}`")
+
+        directory = Path(directory)
+
+        is_file_format = i == len(dirs) - 1
+        
+        if not is_file_format and not directory.exists():
+            directory.mkdir()
+        elif is_file_format and not directory.exists():
+            directory.touch()
+    
+        last_dir += slash + dirs[i]
+    
+    return last_dir
+
+def show_diff(d1, d2, fromfile: str, tofile: str) -> str:
+    from difflib import context_diff
+    
+    diff = context_diff(
+        d1, d2, fromfile=fromfile, tofile=tofile
+    )
+    
+    return diff
 
 def split_data_to_batches(data_n: int, k: int) -> list:
     """
@@ -75,7 +150,6 @@ def split_data_to_batches(data_n: int, k: int) -> list:
     batches = [(i * x, (i + 1) * x) for i in range(k)]
     
     return batches
-
 
 def list_files_in_directory(directory: str) -> list[str]:
     return [str(file) for file in Path(directory).rglob('*') if file.is_file()]
