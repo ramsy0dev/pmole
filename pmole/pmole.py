@@ -25,8 +25,7 @@ __all__ = [
 ]
 
 from pathlib import Path
-
-from pmole.globals import logger
+from loguru import logger
 
 from pmole.convert import Convert
 
