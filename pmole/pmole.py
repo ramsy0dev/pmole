@@ -126,7 +126,6 @@ class Pmole:
         for buffer in file.read(threads=threads, mode=BY_LINE):
             buffer = buffer.strip()
             logger.debug(f"Current buffer: {buffer}")
-            logger.debug(f"Splited buffer: {buffer.split(' ')}")
 
             if buffer[0:2] == "::":
                 constructed_file_path = buffer.replace(":: ", "").strip()
@@ -212,7 +211,7 @@ class Pmole:
                 # Write buffer when hitting line length
                 if len(buffer) == line_length:
                     output_data.append("\n" + " ".join(buffer))
-                    logger.debug(f"Output data:\n{output_data[-1]}")
+                    
                     buffer = ["--"]  # Reset buffer
 
             # # Ensure last buffer is added
