@@ -60,8 +60,7 @@ class Pmole:
         """
         files: list[FileHandler] = list()
         files_paths: list[str] = list()
-        dictionary: LZWDictionary = LZWDictionary()
-        dictionary.create()
+        
 
         if directory_path is not None:
             files_paths = list_files_in_directory(
@@ -82,6 +81,9 @@ class Pmole:
         output_data: list[list[int]] = list()
         
         for file in files:
+            dictionary: LZWDictionary = LZWDictionary()
+            dictionary.create()
+        
             logger.info(f"Compressing file `{file.file_path}`...")
 
             file_buffer = file.read(threads)
