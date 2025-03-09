@@ -4,9 +4,6 @@
 Pmole is a library for reproducing data from a single file.
 Pmole uses `.cm` file extension to create an "origin" file that will be used to reproduce the compressed data.
 
-> [!NOTE]
-> The project is still in early developement, right now, compressing a directory and decompressing it will result in data being lost.
-
 # Installation
 
 You can use **pip**:
