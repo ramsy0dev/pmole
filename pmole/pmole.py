@@ -32,8 +32,8 @@ from pmole.convert import Convert
 from pmole.file_handler import FileHandler
 
 # Algos
-from pmole.algo import LZW
-from pmole.algo import LZWDictionary
+from pmole.lzw import LZW
+from pmole.lzw import LZWDictionary
 
 # File handler
 from pmole.file_handler import FileHandler
@@ -61,7 +61,6 @@ class Pmole:
         files: list[FileHandler] = list()
         files_paths: list[str] = list()
         
-
         if directory_path is not None:
             files_paths = list_files_in_directory(
                 directory=directory_path
@@ -129,35 +128,35 @@ class Pmole:
             buffer = buffer.strip()
             logger.debug(f"Current buffer: {buffer}")
 
-            if buffer[0:2] == "::":
-                constructed_file_path = buffer.replace(":: ", "").strip()
+            if buffer[0:2] == b"::":
+                constructed_file_path = buffer.replace(b":: ", b"").strip()
                 
                 logger.debug(f"Found file path `{constructed_file_path}`")
 
                 files_paths.append(
                     constructed_file_path
                 )
-                file_h = FileHandler(file_path=constructed_file_path)
+                file_h = FileHandler(file_path=constructed_file_path.decode("utf-8"))
                 files.append(
                     file_h
                 )
                 constructed_file_path = ""
             
-            if buffer[0:2] == "--":
-                for i in buffer.split(" "):
-                    if i == "idx":
+            if buffer[0:2] == b"--":
+                for i in buffer.split(b" "):
+                    if i == b"idx":
                         continue
                     
-                    if i == "--":
+                    if i == b"--":
                         continue
 
-                    if i == "[EOF]":
+                    if i == b"[EOF]":
                         logger.info(f"Decompressing file `{files[-1].file_path}`...")
 
                         decompressed_file_data = self.lzw.decompress(
                             compressed_data=constructed_compressed_file_data
                         )
-                        logger.debug(f"Decompressed file data: {decompressed_file_data}")
+                        logger.debug(f"Decompressed file data: \n{decompressed_file_data}")
                         
                         file_h.write(
                             data=decompressed_file_data

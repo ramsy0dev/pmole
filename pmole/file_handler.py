@@ -956,13 +956,10 @@ class FileHandler:
     """
     FileHandler
     """
-
     def __init__(self, file_path: str) -> None:
         self.file_path = file_path
 
-    def read(
-        self, threads: int, mode: int | None = BY_CHUNKS, chunks: int | None = None
-    ) -> Generator[bytes]:
+    def read(self, threads: int, mode: int | None = BY_CHUNKS, chunks: int | None = None) -> Generator[bytes]:
         """
         Read the file data.
         """
@@ -971,13 +968,12 @@ class FileHandler:
             size = Path(self.file_path).__sizeof__()
             chunks = int(size / threads)
 
-        with open(self.file_path, "r", encoding="utf-8") as f:
+        with open(self.file_path, "rb") as f:
             if mode == BY_CHUNKS:
                 while buffer := f.read(chunks):
                     yield buffer
 
             if mode == BY_LINE:
-                print(f"reading by line file `{self.file_path}`")
                 for line in f:
                     yield line
 
@@ -994,7 +990,7 @@ class FileHandler:
                 path=self.file_path
             )
         
-        with open(file_path, "w", encoding="utf-8") as o:
+        with open(file_path, "wb") as o:
             o.write(data)
 
     def detect_file_encoding(self) -> str: ...
