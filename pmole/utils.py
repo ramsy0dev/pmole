@@ -108,7 +108,6 @@ def create_path(path: str) -> str:
     last_dir = root_dir
     
     for i in range(len(dirs)):
-        print(f"{last_dir = }")
         directory = ""
         
         if dirs[i] == "":
