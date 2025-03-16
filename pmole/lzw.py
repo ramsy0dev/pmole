@@ -51,7 +51,6 @@ class LZW:
     """
     Lempel-Ziv-Welch lossless compression algorithm
     """
-
     def __init__(self) -> None:
         pass
 
@@ -68,24 +67,28 @@ class LZW:
 
         compressed_data = []
 
-        last_char = ""
+        last_char = bytes([])  # Empty bytes
         dict_size = dictionary.INIT_DICT_SIZE
 
         for buffer in data:
             for char in buffer:
-                current_sequence = last_char + char
+                current_sequence = last_char + bytes([char])
 
                 exists, idx = dictionary.exists(key=current_sequence)
                 if exists:
                     last_char = current_sequence
                 else:
                     idx = dict_size
-                    compressed_data.append(dictionary.get_value(key=last_char))
-
+                    
+                    try:
+                        compressed_data.append(dictionary.get_value(key=last_char))
+                    except KeyError:
+                        logger.warning(f"Key not found error, faild to fetch the value for key '{last_char}'")
+                    
                     dictionary.add(key=current_sequence, value=idx)
                     dict_size += 1
 
-                    last_char = char
+                    last_char = bytes([char])
 
         if last_char:
             compressed_data.append(dictionary.get_value(last_char))
@@ -123,18 +126,19 @@ class LZW:
             if exists:
                 entry = value
             elif token == dict_size:
-                entry = w + w[0]
+                entry = w + w[0:1] # Convert w[0] to bytes
             else:
                 logger.warning(f"Invalid token encountered: {token = }")
                 # raise ValueError(f"Invalid token encountered: {token = }")
 
             result.append(entry)
-            dictionary.add(key=w + entry[0], value=dict_size)
+            
+            dictionary.add(key=w + entry[0:1], value=dict_size)
 
             dict_size += 1
             w = entry
 
-        return "".join(result)
+        return b"".join(result)
 
 
 class LZWDictionary:
@@ -256,7 +260,7 @@ class LZWDictionary:
         self.dictionary["char"] = columns
 
         # NOTE: Testing loading cached dictionary
-        #       it doesn't work
+        # it doesn't work
         # if generate_default_dict:
         #     if self.check_cache_exists():
         #         logger.debug("Found dictionary in the cache.")
@@ -280,7 +284,7 @@ class LZWDictionary:
         
     def add(
         self,
-        key: str,
+        key: bytes,
         value: int | None = None,
         ignore_exists_checks: bool | None = False,
     ) -> None:
@@ -298,16 +302,18 @@ class LZWDictionary:
 
         self.reverse_dictionary[value] = key
 
+        logger.debug(f"Added key `{key}` with value `{value}` to the dictionary")
+         
         self.values.append(value)
         self.keys.append(key)
 
-    def get_key(self, value) -> str:
+    def get_key(self, value) -> bytes:
         """
         Get key using value
         """
         return self.reverse_dictionary[value]
 
-    def get_value(self, key) -> str:
+    def get_value(self, key) -> bytes:
         """
         Get value using key.
         """
@@ -399,10 +405,15 @@ class LZWDictionary:
         """
         d = {}
         for i in range(start, stop):
-            d[str(chr(i))] = [int(i), int(0)]
-            reverse_dictionary[int(i)] = str(chr(i))
-
-        return {str(chr(i)): [int(i), int(0)] for i in range(start, stop)}
+            try:
+                byte_value = chr(i).encode("utf-8")
+                d[byte_value] = [int(i), int(0)]
+                reverse_dictionary[int(i)] = byte_value
+            except UnicodeEncodeError:
+                # Skip characters that cannot be encoded in UTF-8
+                continue
+        logger.debug(f"Generated dictionary from {start} to {stop}: \n{list(d.items())}")
+        return d
 
     @staticmethod
     def worker(start, stop, idx, shared_results, reverse_dictionary):
