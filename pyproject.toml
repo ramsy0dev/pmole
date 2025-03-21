@@ -16,7 +16,7 @@ beautifultable = "^1.1.0"
 
 
 [tool.poetry.group.dev.dependencies]
-debugpy = "^1.8.12"
+debugpy = "^1.8.13"
 
 [build-system]
 requires = ["poetry-core"]
