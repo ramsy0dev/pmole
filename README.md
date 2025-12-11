@@ -1,8 +1,8 @@
 
 # Introduction
 
-Pmole is a library for reproducing data from a single file.
-Pmole uses `.cm` file extension to create an "origin" file that will be used to reproduce the compressed data.
+Pmole is a library for compressing code bases into a single file.
+Pmole uses `.pm` file extension to create an "origin" file that will be used to reproduce the code base data.
 
 > [!NOTE]
 > The project is still in early developement, right now, compressing a directory and decompressing it will result in data being lost.
@@ -47,13 +47,13 @@ decompressed_data = lzw.decompress(
 
 * ## CLI
 
-Compressing a single file:
+Compressing a single source file:
 
 ```bash
 pmole compress --file-path /path/to/file
 ```
 
-Compressing a directory:
+Compressing a code base directory:
 
 ```bash
 pmole compress --dir-path /path/to/file
