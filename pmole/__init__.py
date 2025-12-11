@@ -30,3 +30,6 @@ from pmole.globals import *
 
 # Utils
 from pmole.utils import *
+
+# Main classes
+from pmole.pmole import Pmole
