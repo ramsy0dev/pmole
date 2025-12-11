@@ -27,8 +27,6 @@ __all__ = [
 from pathlib import Path
 from loguru import logger
 
-from pmole.convert import Convert
-
 from pmole.file_handler import FileHandler
 
 # LZW algorithm
@@ -50,7 +48,6 @@ class Pmole:
     amount of data into smaller ones that can proccessed as needed.
     """
     def __init__(self) -> None:
-        self.convert = Convert()
         self.lzw = LZW()
     
     @measure_time
