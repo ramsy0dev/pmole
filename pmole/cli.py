@@ -25,7 +25,6 @@ __all__ = [
 ]
 
 import os
-
 import typer
 
 from loguru import logger
@@ -33,11 +32,19 @@ from pathlib import Path
 
 from .pmole import Pmole
 
+# Utils
+from pmole.utils import (
+    check_file_path,
+    show_diff
+)
+
 # Globals
 from pmole.globals import (
     CACHE_DIR,
     DICTIONARY_CACHE_FILE_PATH,
     REVERSE_DICTIONARY_CACHE_FILE_PATH,
+    EXCLUDE_EXTENSIONS,
+    EXCLUDE_DIRECTORIES
 )
 
 cli = typer.Typer()
@@ -56,7 +63,9 @@ def compress(
     file_path: str = typer.Option(None, "--file-path", help="The file path."),
     directory_path: str = typer.Option(None, "--dir-path", help="The directory path."),
     threads: int = typer.Option(7, "--threads", help="The number of threads."),
-):
+    exclude_extensions: list[str] = typer.Option(EXCLUDE_EXTENSIONS, "--exclude-extentions", help="A list of file extensions to exclude."),
+    exclude_directories: list[str] = typer.Option(EXCLUDE_DIRECTORIES, "--exclude-dirs", help="A list of directories to exclude.")
+    ):
     """
     Compress a file
     """
@@ -73,10 +82,13 @@ def compress(
     if Path(path).is_symlink():
         logger.error(f"Symlinks are not supported.")
         exit(1)
-
+    
     pmole = Pmole()
 
-    pmole.compress(file_path=file_path, directory_path=directory_path, threads=threads)
+    pmole.compress(
+        file_path=file_path,
+        directory_path=directory_path,
+    )
 
 @cli.command()
 def decompress(
@@ -100,6 +112,33 @@ def decompress(
 
     logger.info(f"Decompressing is complete.")
 
+@cli.command()
+def diff(
+    file_path_n1: str = typer.Option(None, "--file-path-n1", help="First file path"),
+    file_path_n2: str = typer.Option(None, "--file-path-n2", help="Second file path")
+    ):
+    """
+    Show difference between two files.
+    """
+    if not check_file_path(file_path_n1):
+        logger.error(f"The provided path '{file_path_n1}' doesn't exists.")
+        exit(1)
+
+    if not check_file_path(file_path_n2):
+        logger.error(f"The provided path '{file_path_n2}' doesn't exists.")
+        exit(1)
+
+    file_n1 = open(file_path_n1, "r").read()
+    file_n2 = open(file_path_n2, "r").read()
+    
+    diff_list = show_diff(
+        file_n1.splitlines(True), file_n2.splitlines(True), file_path_n1, file_path_n2
+    )
+    
+    logger.info(f"Diff for files {file_path_n1} and {file_path_n2}.")
+    for line in diff_list:
+        print(line)
+    
 def run() -> None:
     setup_cli_dir()
     cli()
