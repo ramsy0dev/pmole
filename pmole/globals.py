@@ -27,7 +27,9 @@ __all__ = [
     "ROOT_CONFIG_DIR",
     "CACHE_DIR",
     "DICTIONARY_CACHE_FILE_PATH",
-    "REVERSE_DICTIONARY_CACHE_FILE_PATH"
+    "REVERSE_DICTIONARY_CACHE_FILE_PATH",
+    "EXCLUDE_EXTENSIONS",
+    "EXCLUDE_DIRECTORIES"
 ]
 
 import os
@@ -52,3 +54,83 @@ elif PLATFORM == PL_WINDOWS:
 CACHE_DIR = ROOT_CONFIG_DIR + SLASH + "cache"
 DICTIONARY_CACHE_FILE_PATH = CACHE_DIR + SLASH + "pre_generated_dictionary.json"
 REVERSE_DICTIONARY_CACHE_FILE_PATH = CACHE_DIR + SLASH + "pre_generated_reverse_dictionary.json"
+
+# Exclude extensions and directories
+EXCLUDE_EXTENSIONS = [
+    # Windows related executables
+    "exe",
+    "dll",
+    "src",
+    "bat",
+    "cmd",
+    "msi",
+
+    # Linux/Unix-like systems
+    "out",
+    "so",
+    "ko",
+
+    # MacOS
+    "app",
+    "dylib",
+    "framework",
+
+    # Cross-platform compiled
+    "wasm",
+    "elf",
+    "bin",
+    "img",
+    "hex",
+    "srec",
+    "rom",
+
+    # Executable containers and scripts
+    "bios",
+    "jar",
+    "class",
+    "pyc",
+    "apk",
+    "ipa",
+    "xex",
+    "xbe",
+    "3dsx",
+
+    # Game engines
+    "pak",
+    "gdc",
+    "pck",
+    "uasset",
+
+    # Raw machine code
+    "boot",
+    "sys",
+    "efi",
+    "bootloader"
+]
+
+
+EXCLUDE_DIRECTORIES = [
+    ".git",
+    "__pycache__",
+    "bin",
+    "build",
+    "dist",
+    "obj",
+    "out",
+    "lib",
+    "vendor",
+    "assets",
+    "res",
+    "ressources",
+    "static",
+    "public",
+    "cache",
+    "data",
+    "target",
+    "coverage",
+    "cov",
+    "tmp",
+    "temp",
+    "fonts",
+    "media"
+]
