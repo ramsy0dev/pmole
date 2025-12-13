@@ -63,13 +63,18 @@ def compress(
     file_path: str = typer.Option(None, "--file-path", help="The file path."),
     directory_path: str = typer.Option(None, "--dir-path", help="The directory path."),
     threads: int = typer.Option(7, "--threads", help="The number of threads."),
-    exclude_extensions: list[str] = typer.Option(EXCLUDE_EXTENSIONS, "--exclude-extentions", help="A list of file extensions to exclude."),
-    exclude_directories: list[str] = typer.Option(EXCLUDE_DIRECTORIES, "--exclude-dirs", help="A list of directories to exclude.")
+    exclude_extensions: str = typer.Option(EXCLUDE_EXTENSIONS, "--exclude-extentions", help="A list of file extensions to exclude."),
+    exclude_directories: str = typer.Option(EXCLUDE_DIRECTORIES, "--exclude-dirs", help="A list of directories to exclude.")
     ):
     """
     Compress a file
     """
     path = file_path if file_path is not None else directory_path
+    
+    if len(exclude_directories) > 0:
+        EXCLUDE_DIRECTORIES.extend(exclude_directories.split(","))
+    if len(exclude_extensions) > 0:
+        EXCLUDE_EXTENSIONS.extend(exclude_extensions.split(","))
 
     logger.info(
         f"Compressing {'file' if file_path is not None else 'directory'} `{path}`..."
@@ -88,6 +93,8 @@ def compress(
     pmole.compress(
         file_path=file_path,
         directory_path=directory_path,
+        exclude_directories=EXCLUDE_DIRECTORIES,
+        exclude_extensions=EXCLUDE_EXTENSIONS
     )
 
 @cli.command()

@@ -27,7 +27,6 @@ __all__ = [
 ]
 
 from pathlib import Path
-from typing import Generator
 
 from pmole.utils import create_path
 from pmole.globals import SLASH
@@ -43,7 +42,7 @@ class FileHandler:
     def __init__(self, file_path: str) -> None:
         self.file_path = file_path
 
-    def read(self, threads: int, mode: int | None = BY_CHUNKS, chunks: int | None = None) -> Generator[bytes]:
+    def read(self, threads: int, mode: int | None = BY_CHUNKS, chunks: int | None = None):
         """
         Read the file data.
         """

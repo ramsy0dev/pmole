@@ -158,19 +158,17 @@ def split_data_to_batches(data_n: int, k: int) -> list:
     
     return batches
 
-def list_files_in_directory(directory: str) -> list[str]:
+def list_files_in_directory(directory: str, exclude_directories: list[str], exclude_extensions: list[str]) -> list[str]:
     """
     List all files in a directory recursively, excluding files based on EXCLUDE_EXTENSIONS
     and EXCLUDE_DIRECTORIES criteria.
     """
-    from pmole.globals import EXCLUDE_EXTENSIONS, EXCLUDE_DIRECTORIES
-
     all_files = []
     excluded_files = []
 
     # Convert to lowercase for case-insensitive matching
-    exclude_extensions_lower = {ext.lower() for ext in EXCLUDE_EXTENSIONS}
-    exclude_directories_lower = {dir_name.lower() for dir_name in EXCLUDE_DIRECTORIES}
+    exclude_extensions_lower = {ext.lower() for ext in exclude_extensions}
+    exclude_directories_lower = {dir_name.lower() for dir_name in exclude_directories}
 
     # Check for excluded directories
     for file_path in Path(directory).rglob('*'):

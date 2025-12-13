@@ -42,6 +42,9 @@ from pmole.utils import Nodes
 from pmole.utils import measure_time
 from pmole.utils import list_files_in_directory
 
+# Globals
+from pmole.globals import EXCLUDE_DIRECTORIES, EXCLUDE_EXTENSIONS
+
 class Pmole:
     """
     pmole is a compression algorithm that aims to convert large
@@ -51,7 +54,7 @@ class Pmole:
         self.lzw = LZW()
     
     @measure_time
-    def compress(self, file_path: str | None = None, directory_path: str | None = None, threads: int | None = 7) -> None:
+    def compress(self, file_path: str | None = None, directory_path: str | None = None, exclude_directories: list[str] | None = EXCLUDE_DIRECTORIES, exclude_extensions: list[str] | None = EXCLUDE_EXTENSIONS, threads: int | None = 7) -> None:
         """
         Compress a file or a directory.
         """
@@ -60,7 +63,9 @@ class Pmole:
         
         if directory_path is not None:
             files_paths = list_files_in_directory(
-                directory=directory_path
+                directory=directory_path,
+                exclude_directories=exclude_directories,
+                exclude_extensions=exclude_extensions
             )
             
             logger.info(f"Found {len(files_paths)} files.")
@@ -92,7 +97,7 @@ class Pmole:
             
             output_data.append(compressed_data)
         
-        if len(files_paths) > 1:
+        if len(files_paths) >= 1 and file_path is None:
             output_file_name = Path(directory_path).name + ".pm"
         else:
             output_file_name = Path(file_path).name.split(".")[0] + ".pm"
