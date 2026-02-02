@@ -15,7 +15,7 @@ wcwidth = "^0.2.14"
 
 
 [tool.poetry.group.dev.dependencies]
-debugpy = "^1.8.14"
+debugpy = "^1.8.20"
 
 [build-system]
 requires = ["poetry-core"]
