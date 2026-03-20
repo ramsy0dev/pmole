@@ -24,220 +24,488 @@ __all__ = [
     "Pmole"
 ]
 
+import contextlib
+import os
+import re
+import struct
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from pathlib import Path
+
+import pathspec
 from loguru import logger
 
+from pmole.crypto import _ENC_MAGIC, encrypt_archive, decrypt_archive
 from pmole.file_handler import FileHandler
+from pmole.compression import (
+    ALGO_NAMES,
+    compress_with_algo,
+    decompress_with_algo,
+    compress_auto,
+)
+from pmole.utils import measure_time, list_files_in_directory
+from pmole.globals import (
+    EXCLUDE_DIRECTORIES,
+    EXCLUDE_EXTENSIONS,
+    EXCLUDE_FILENAMES,
+    MAX_FILE_SIZE_BYTES,
+)
 
-# LZW algorithm
-from pmole.lzw import LZW
-from pmole.lzw import LZWDictionary
+# ── Format constants ────────────────────────────────────────────────────────
+PM_MAGIC       = b"PM\x03\x00"
+PM_HEADER_SIZE = 16
 
-# File handler
-from pmole.file_handler import FileHandler
-from pmole.file_handler import BY_LINE
+_FILE_SECTION_HEADER_SIZE = 18
+_FILE_SECTION_HEADER_FMT  = "<QQBB"   # orig, compr, is_binary, algo
 
-# Utils
-from pmole.utils import Nodes
-from pmole.utils import measure_time
-from pmole.utils import list_files_in_directory
+_INDEX_ENTRY_FIXED_SIZE = 28
+_INDEX_ENTRY_FMT        = "<QQQBBH"  # data_offset, orig, compr, is_bin, algo, path_len
 
-# Globals
-from pmole.globals import EXCLUDE_DIRECTORIES, EXCLUDE_EXTENSIONS
+
+# ── Ignore-spec loading ──────────────────────────────────────────────────────
+
+def _load_ignore_spec(directory: str):
+    """
+    Load ``.pmignore`` (preferred) or ``.gitignore`` from *directory*.
+    Returns a ``pathspec.PathSpec`` or ``None`` if neither file exists.
+    """
+    for name in (".pmignore", ".gitignore"):
+        ignore_file = Path(directory) / name
+        if ignore_file.exists():
+            try:
+                lines = ignore_file.read_text(encoding="utf-8", errors="ignore").splitlines()
+                spec = pathspec.PathSpec.from_lines("gitignore", lines)
+                logger.info(f"Loaded ignore patterns from '{ignore_file}'.")
+                return spec
+            except Exception as exc:
+                logger.warning(f"Could not parse '{ignore_file}': {exc}")
+    return None
+
+
+# ── Encrypted-archive helper ────────────────────────────────────────────────
+
+@contextlib.contextmanager
+def _open_pm(file_path: str, password: str | None):
+    """
+    Context manager that yields the effective archive path to operate on.
+
+    * Non-encrypted archives: yields *file_path* unchanged.
+    * Encrypted archives: decrypts to a temp file, yields its path, deletes it
+      on exit.  The temp file persists for the entire ``with`` block so that
+      worker threads opened inside the block remain valid.
+    """
+    with open(file_path, "rb") as f:
+        magic = f.read(4)
+
+    if magic == _ENC_MAGIC:
+        if password is None:
+            raise ValueError("Archive is password-protected. Provide a password.")
+        with open(file_path, "rb") as f:
+            raw = f.read()
+        plain = decrypt_archive(raw, password)
+        fd, tmp_path = tempfile.mkstemp(suffix=".pm")
+        try:
+            os.close(fd)
+            with open(tmp_path, "wb") as f:
+                f.write(plain)
+            yield tmp_path
+        finally:
+            with contextlib.suppress(OSError):
+                os.unlink(tmp_path)
+    else:
+        yield file_path
+
+
+# ── Module-level task functions ──────────────────────────────────────────────
+
+def _compress_file_task(fp: str, algo: int | None) -> tuple:
+    """
+    Read and compress one file.
+    Returns ``(fp, orig_size, is_binary, chosen_algo, compressed_bytes)``.
+    Runs in a thread pool; zlib/lzma release the GIL so threads parallelize.
+    """
+    orig_size = os.path.getsize(fp)
+    is_binary = b"\x00" in open(fp, "rb").read(8192)
+    data      = b"".join(FileHandler(fp).read(threads=1))
+
+    if algo is None:
+        chosen_algo, compressed = compress_auto(data)
+    else:
+        chosen_algo = algo
+        compressed  = compress_with_algo(data, algo)
+
+    logger.info(
+        f"Compressed '{fp}': {orig_size} B → {len(compressed)} B "
+        f"({ALGO_NAMES[chosen_algo]})"
+    )
+    return (fp, orig_size, is_binary, chosen_algo, compressed)
+
+
+def _decompress_file_task(
+    pm_file_path: str, entry: dict, output_dir: str
+) -> str:
+    """
+    Decompress one archived file and write it to disk.
+    Opens the archive independently so multiple threads can work in parallel.
+    Returns the path written.
+    """
+    with open(pm_file_path, "rb") as f:
+        f.seek(entry["data_offset"] + _FILE_SECTION_HEADER_SIZE)
+        compressed_bytes = f.read(entry["compressed_size"])
+
+    decompressed = decompress_with_algo(compressed_bytes, entry["algo"])
+
+    path_parts = entry["path"].split("/")
+    out_path   = str(Path(output_dir) / Path(*path_parts))
+    FileHandler(out_path).write_binary(decompressed)
+    logger.info(f"Decompressed '{entry['path']}' → '{out_path}'")
+    return out_path
+
+
+def _verify_file_task(pm_file_path: str, entry: dict) -> dict:
+    """
+    Decompress one file in-memory and verify the decompressed size.
+    Returns ``{path, ok, error}``.
+    """
+    try:
+        with open(pm_file_path, "rb") as f:
+            f.seek(entry["data_offset"] + _FILE_SECTION_HEADER_SIZE)
+            compressed_bytes = f.read(entry["compressed_size"])
+        data = decompress_with_algo(compressed_bytes, entry["algo"])
+        if len(data) != entry["original_size"]:
+            return {
+                "path":  entry["path"],
+                "ok":    False,
+                "error": (
+                    f"Size mismatch: expected {entry['original_size']} B, "
+                    f"got {len(data)} B"
+                ),
+            }
+        return {"path": entry["path"], "ok": True, "error": None}
+    except Exception as exc:
+        return {"path": entry["path"], "ok": False, "error": str(exc)}
+
+
+def _search_file_task(pm_file_path: str, entry: dict, pattern: str) -> list[dict]:
+    """
+    Search for *pattern* (regex) in one archived text file.
+    Binary files are skipped.
+    Returns a list of ``{path, line_no, line}`` match dicts.
+    """
+    if entry["is_binary"]:
+        return []
+    try:
+        with open(pm_file_path, "rb") as f:
+            f.seek(entry["data_offset"] + _FILE_SECTION_HEADER_SIZE)
+            compressed_bytes = f.read(entry["compressed_size"])
+        text = decompress_with_algo(compressed_bytes, entry["algo"]).decode(
+            "utf-8", errors="replace"
+        )
+        matches = []
+        compiled = re.compile(pattern)
+        for line_no, line in enumerate(text.splitlines(), 1):
+            if compiled.search(line):
+                matches.append({
+                    "path":    entry["path"],
+                    "line_no": line_no,
+                    "line":    line.rstrip("\r\n"),
+                })
+        return matches
+    except Exception:
+        return []
+
+
+# ── Internal helpers ─────────────────────────────────────────────────────────
+
+def _read_index(f) -> list[dict]:
+    """Read and return the index from an open ``.pm`` file handle."""
+    magic = f.read(4)
+    if magic != PM_MAGIC:
+        logger.error(f"Invalid .pm file: expected {PM_MAGIC!r}, got {magic!r}")
+        return []
+
+    _file_count, index_offset = struct.unpack("<IQ", f.read(12))
+    f.seek(index_offset)
+
+    entry_count = struct.unpack("<I", f.read(4))[0]
+    entries: list[dict] = []
+    for _ in range(entry_count):
+        data_offset, orig_size, compr_size, is_bin, algo, path_len = struct.unpack(
+            _INDEX_ENTRY_FMT, f.read(_INDEX_ENTRY_FIXED_SIZE)
+        )
+        path = f.read(path_len).decode("utf-8")
+        entries.append({
+            "path":            path,
+            "original_size":   orig_size,
+            "compressed_size": compr_size,
+            "is_binary":       bool(is_bin),
+            "algo":            algo,
+            "data_offset":     data_offset,
+        })
+    return entries
+
+
+# ── PMFileWriter ─────────────────────────────────────────────────────────────
+
+class PMFileWriter:
+    """
+    Context manager that writes a binary ``.pm`` archive in a single forward
+    pass, then patches the header once all files are written.
+    """
+    def __init__(self, output_path: str) -> None:
+        self.output_path = output_path
+        self.entries: list[tuple] = []
+        self._file = None
+
+    def __enter__(self):
+        Path(self.output_path).parent.mkdir(parents=True, exist_ok=True)
+        self._file = open(self.output_path, "wb")
+        self._file.write(PM_MAGIC)
+        self._file.write(struct.pack("<I", 0))  # file_count — patched later
+        self._file.write(struct.pack("<Q", 0))  # index_offset — patched later
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if exc_type is None:
+            self.finalize()
+        self._file.close()
+
+    def add_compressed(
+        self,
+        archived_path: str,
+        orig_size: int,
+        is_binary: bool,
+        algo: int,
+        compressed_bytes: bytes,
+    ) -> None:
+        """Write pre-compressed data for one file into the archive."""
+        data_offset     = self._file.tell()
+        compressed_size = len(compressed_bytes)
+
+        self._file.write(
+            struct.pack(_FILE_SECTION_HEADER_FMT, orig_size, compressed_size, int(is_binary), algo)
+        )
+        self._file.write(compressed_bytes)
+        self.entries.append(
+            (data_offset, orig_size, compressed_size, int(is_binary), algo, archived_path)
+        )
+
+    def finalize(self) -> None:
+        """Write the index table and back-patch file_count + index_offset."""
+        index_offset = self._file.tell()
+
+        self._file.write(struct.pack("<I", len(self.entries)))
+        for data_offset, orig_size, compr_size, is_bin, algo, path in self.entries:
+            norm_path  = path.replace("\\", "/")
+            path_bytes = norm_path.encode("utf-8")
+            self._file.write(
+                struct.pack(_INDEX_ENTRY_FMT, data_offset, orig_size, compr_size, is_bin, algo, len(path_bytes))
+            )
+            self._file.write(path_bytes)
+
+        self._file.seek(4)
+        self._file.write(struct.pack("<I", len(self.entries)))
+        self._file.write(struct.pack("<Q", index_offset))
+
+
+# ── Pmole ────────────────────────────────────────────────────────────────────
 
 class Pmole:
     """
-    pmole is a compression algorithm that aims to convert large
-    amount of data into smaller ones that can proccessed as needed.
+    Compress files or directories into a binary ``.pm`` archive using
+    selectable or auto-detected compression (LZW, LZW+zlib, zlib, lzma).
+    Compression and decompression are parallelised across ``threads`` workers.
+    Archives can optionally be AES-256-GCM encrypted with a password.
     """
     def __init__(self) -> None:
-        self.lzw = LZW()
-    
+        pass
+
     @measure_time
-    def compress(self, file_path: str | None = None, directory_path: str | None = None, exclude_directories: list[str] | None = EXCLUDE_DIRECTORIES, exclude_extensions: list[str] | None = EXCLUDE_EXTENSIONS, threads: int | None = 7) -> None:
+    def compress(
+        self,
+        file_path: str | None = None,
+        directory_path: str | None = None,
+        exclude_directories: list[str] | None = None,
+        exclude_extensions: list[str] | None = None,
+        exclude_filenames: list[str] | None = None,
+        max_file_size_bytes: int | None = None,
+        threads: int = 3,
+        output_path: str | None = None,
+        algo: int | None = None,
+        password: str | None = None,
+    ) -> str:
         """
-        Compress a file or a directory.
+        Compress a file or directory into a binary ``.pm`` archive.
+
+        If *password* is provided the archive is encrypted with AES-256-GCM
+        (PBKDF2-HMAC-SHA256 key derivation, 260 000 iterations).
+
+        Returns the path of the created archive.
         """
-        files: list[FileHandler] = list()
-        files_paths: list[str] = list()
-        
+        exc_dirs  = exclude_directories if exclude_directories is not None else list(EXCLUDE_DIRECTORIES)
+        exc_exts  = exclude_extensions  if exclude_extensions  is not None else list(EXCLUDE_EXTENSIONS)
+        exc_names = exclude_filenames   if exclude_filenames   is not None else list(EXCLUDE_FILENAMES)
+        max_size  = max_file_size_bytes if max_file_size_bytes is not None else MAX_FILE_SIZE_BYTES
+
         if directory_path is not None:
             files_paths = list_files_in_directory(
                 directory=directory_path,
-                exclude_directories=exclude_directories,
-                exclude_extensions=exclude_extensions
+                exclude_directories=exc_dirs,
+                exclude_extensions=exc_exts,
+                exclude_filenames=exc_names,
+                max_file_size_bytes=max_size,
             )
-            
-            logger.info(f"Found {len(files_paths)} files.")
-
-            files = [FileHandler(file_path) for file_path in files_paths]
-        else:
-            files = [FileHandler(file_path), ]
-            files_paths = [file_path, ]
-
-        file_structure = self.generate_file_structure(
-            files_paths=[file_path for file_path in files_paths]
-        )
-
-        output_data: list[list[int]] = list()
-        
-        for file in files:
-            dictionary: LZWDictionary = LZWDictionary()
-            dictionary.create()
-        
-            logger.info(f"Compressing file `{file.file_path}`...")
-
-            file_buffer = file.read(threads)
-            # Decode bytes to string for LZW compression
-            string_data = (chunk.decode('utf-8') for chunk in file_buffer)
-            compressed_data = self.lzw.compress(
-                data=string_data,
-                dictionary=dictionary
-            )
-            
-            output_data.append(compressed_data)
-        
-        if len(files_paths) >= 1 and file_path is None:
-            output_file_name = Path(directory_path).name + ".pm"
-        else:
-            output_file_name = Path(file_path).name.split(".")[0] + ".pm"
-        
-        logger.info("Constructing compress output file's data...")
-
-        compressed_file_content = self.output_file_data(
-            file_structure=file_structure,
-            compressed_data=output_data
-        )
-
-        logger.debug(f"Compressed file content preview: {repr(compressed_file_content[:100])}")
-
-        output_file = FileHandler(output_file_name)
-        output_file.write(
-            compressed_file_content
-        )
-
-        logger.info(f"Compressing is done. output file is `{output_file_name}`.")
-
-    def decompress(self, file_path: str, threads: int | None = 3) -> None:
-        """
-        Decompress data with visual formatting support
-        """
-        file = FileHandler(file_path=file_path)
-
-        # Read entire file content at once to handle multi-line compressed data
-        file_content = ""
-        for buffer in file.read(threads=threads, mode=BY_LINE):
-            file_content += buffer.decode("utf-8")
-
-        # Parse the file content
-        lines = file_content.strip().split('\n')
-        i = 0
-
-        while i < len(lines):
-            line = lines[i].strip()
-
-            if line.startswith(":: "):
-                # Extract file path
-                file_path = line[3:].strip()  # Remove ":: " prefix
-                logger.debug(f"Found file path `{file_path}`")
-
-                # Create file handler for this file
-                file_h = FileHandler(file_path=file_path)
-
-                # Collect all compressed tokens for this file
-                compressed_tokens = []
-                i += 1  # Move to next line
-
-                # Collect tokens from all "--" lines until "[EOF]" is found
-                found_eof = False
-                while i < len(lines) and not found_eof:
-                    line = lines[i].strip()
-
-                    if line.startswith("-- "):
-                        # Parse tokens from this line
-                        parts = line.split()
-                        # Skip "--" and collect tokens until "[EOF]" or end
-                        for part in parts[1:]:
-                            if part == "[EOF]":
-                                # Found end marker, we've collected all tokens
-                                found_eof = True
-                                break
-                            try:
-                                compressed_tokens.append(int(part))
-                            except ValueError:
-                                logger.warning(f"Invalid token '{part}', skipping")
-                        i += 1
-                    elif line.startswith(":: "):
-                        # Next file started, break
-                        break
-                    else:
-                        i += 1
-
-                # Decompress the collected tokens
-                if compressed_tokens and found_eof:
-                    logger.info(f"Decompressing file `{file_path}`...")
-
-                    decompressed_file_data = self.lzw.decompress(
-                        compressed_data=compressed_tokens
+            # Apply .pmignore / .gitignore patterns
+            ignore_spec = _load_ignore_spec(directory_path)
+            if ignore_spec:
+                base = Path(directory_path)
+                files_paths = [
+                    fp for fp in files_paths
+                    if not ignore_spec.match_file(
+                        Path(fp).relative_to(base).as_posix()
                     )
-                    logger.debug(f"Decompressed file data: \n{decompressed_file_data}")
+                ]
+            logger.info(f"Found {len(files_paths)} files.")
+            default_name = Path(directory_path).name + ".pm"
+        else:
+            files_paths  = [file_path]
+            default_name = Path(file_path).name.split(".")[0] + ".pm"
 
-                    file_h.write(data=decompressed_file_data)
+        output_file_name = output_path if output_path is not None else default_name
 
-            else:
-                i += 1
+        # Compress all files in parallel, preserving input order
+        task = partial(_compress_file_task, algo=algo)
+        with ThreadPoolExecutor(max_workers=threads) as executor:
+            results = list(executor.map(task, files_paths))
 
-    def generate_file_structure(self, files_paths: str, directory_path: str | None = None) -> Nodes:
+        # Write sequentially (file handle is not thread-safe)
+        with PMFileWriter(output_file_name) as writer:
+            for _fp, orig_size, is_binary, chosen_algo, compressed in results:
+                writer.add_compressed(
+                    archived_path=_fp.replace("\\", "/"),
+                    orig_size=orig_size,
+                    is_binary=is_binary,
+                    algo=chosen_algo,
+                    compressed_bytes=compressed,
+                )
+
+        # Encrypt in-place if a password was supplied
+        if password is not None:
+            with open(output_file_name, "rb") as f:
+                plain = f.read()
+            with open(output_file_name, "wb") as f:
+                f.write(encrypt_archive(plain, password))
+            logger.info("Archive encrypted with AES-256-GCM.")
+
+        logger.info(f"Done. Archive: '{output_file_name}'.")
+        return output_file_name
+
+    @measure_time
+    def decompress(
+        self,
+        file_path: str,
+        threads: int = 3,
+        output_dir: str = ".",
+        password: str | None = None,
+    ) -> list[str]:
         """
-        Generate the .pm file structure.
+        Decompress all files from a ``.pm`` archive in parallel.
+        Returns the list of paths written to disk.
         """
-        root_node = Nodes(prev=None)
+        with _open_pm(file_path, password) as effective_path:
+            with open(effective_path, "rb") as f:
+                entries = _read_index(f)
+            if not entries:
+                return []
 
-        root_node_data = []
-        for file_path in files_paths:
-            root_node_data.append(f":: {file_path}")  # Remove trailing newline
+            task = partial(_decompress_file_task, effective_path, output_dir=output_dir)
+            with ThreadPoolExecutor(max_workers=threads) as executor:
+                written = list(executor.map(task, entries))
 
-        root_node.data = root_node_data
+        logger.info(f"Decompression complete. {len(written)} files restored.")
+        return written
 
-        data_node = Nodes(prev=root_node)
+    def list_files(self, pm_file_path: str, password: str | None = None) -> list[dict]:
+        """Return index metadata for all files (no data sections read)."""
+        with _open_pm(pm_file_path, password) as effective_path:
+            with open(effective_path, "rb") as f:
+                return _read_index(f)
 
-        root_node.next = data_node
+    def extract(
+        self,
+        pm_file_path: str,
+        target_path: str,
+        output_dir: str = ".",
+        password: str | None = None,
+    ) -> str:
+        """Extract a single file from the archive by its archived path."""
+        with _open_pm(pm_file_path, password) as effective_path:
+            with open(effective_path, "rb") as f:
+                entries = _read_index(f)
+            if not entries:
+                raise FileNotFoundError(f"Archive is empty or invalid: '{pm_file_path}'")
 
-        data_node.data = str()
+            target_norm = target_path.replace("\\", "/")
+            entry = next((e for e in entries if e["path"] == target_norm), None)
+            if entry is None:
+                raise FileNotFoundError(
+                    f"'{target_path}' not found in archive '{pm_file_path}'."
+                )
 
-        return root_node
-    
-    def output_file_data(self, file_structure: Nodes, compressed_data: list[list[int]], threads_n: int | None = 7) -> str:
+            out_path = _decompress_file_task(effective_path, entry, output_dir)
+
+        logger.info(f"Extracted '{target_path}' → '{out_path}'.")
+        return out_path
+
+    def verify(
+        self,
+        pm_file_path: str,
+        threads: int = 3,
+        password: str | None = None,
+    ) -> list[dict]:
         """
-        Convert the file structure into a file's data.
-        Format compressed tokens with newlines for visual beauty.
+        Decompress every file in-memory and verify its size against the index.
+        Returns a list of ``{path, ok, error}`` dicts — one per archived file.
+        Does **not** write anything to disk.
         """
-        output_data = []
+        with _open_pm(pm_file_path, password) as effective_path:
+            with open(effective_path, "rb") as f:
+                entries = _read_index(f)
+            if not entries:
+                return []
 
-        logger.debug(f"Number of compressed file data: {len(compressed_data)}")
+            task = partial(_verify_file_task, effective_path)
+            with ThreadPoolExecutor(max_workers=threads) as executor:
+                results = list(executor.map(task, entries))
 
-        for i in range(len(compressed_data)):
-            if i == 0:
-                output_data.append(file_structure.data[i])
-            else:
-                output_data.append("\n\n" + file_structure.data[i])
+        ok_count = sum(1 for r in results if r["ok"])
+        logger.info(f"Verified {ok_count}/{len(results)} files OK.")
+        return results
 
-            # Format compressed tokens with newlines for readability
-            token_strings = [str(token) for token in compressed_data[i]]
+    def search(
+        self,
+        pm_file_path: str,
+        pattern: str,
+        threads: int = 3,
+        password: str | None = None,
+    ) -> list[dict]:
+        """
+        Search for a regex *pattern* in all text files in the archive.
+        Binary files are skipped automatically.
+        Returns a list of ``{path, line_no, line}`` match dicts.
+        Does **not** write anything to disk.
+        """
+        with _open_pm(pm_file_path, password) as effective_path:
+            with open(effective_path, "rb") as f:
+                entries = _read_index(f)
+            if not entries:
+                return []
 
-            # Group tokens into lines of ~12 tokens for visual appeal
-            line_length = 12
-            lines = []
-            for j in range(0, len(token_strings), line_length):
-                chunk = token_strings[j:j + line_length]
-                lines.append("-- " + " ".join(chunk))
+            task = partial(_search_file_task, effective_path, pattern=pattern)
+            with ThreadPoolExecutor(max_workers=threads) as executor:
+                per_file = list(executor.map(task, entries))
 
-            # Add [EOF] to the last line
-            if lines:
-                lines[-1] += " [EOF]"
-            else:
-                lines.append("-- [EOF]")
-
-            output_data.extend(lines)
-
-        return "\n".join(output_data)
+        matches = [m for file_matches in per_file for m in file_matches]
+        logger.info(f"Found {len(matches)} match(es) for '{pattern}'.")
+        return matches

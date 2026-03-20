@@ -20,28 +20,59 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-from pmole.lzw import LZW
+import os
+
+from pmole.lzw import LZW, LZWCompressor, RESET_CODE
+
 
 def test_algo_lzw() -> None:
     """
-    Test the LZW algorithm
+    Test basic LZW roundtrip with text-like bytes.
     """
-    # Use simpler test data first to verify basic functionality
-    text_data = "ABABABAABAB"
-
     lzw = LZW()
 
-    compressed_data = lzw.compress(
-        data=text_data
-    )
+    data = b"ABABABAABAB"
+    compressed = lzw.compress(data=data)
+    decompressed = lzw.decompress(compressed_data=compressed)
+    assert decompressed == data
 
-    decompressed_data = lzw.decompress(
-        compressed_data=compressed_data
-    )
-    assert decompressed_data == text_data
+    data2 = b"hello world hello world test"
+    compressed2 = lzw.compress(data=data2)
+    decompressed2 = lzw.decompress(compressed_data=compressed2)
+    assert decompressed2 == data2
 
-    # Test with more complex data
-    text_data2 = "hello world hello world test"
-    compressed_data2 = lzw.compress(data=text_data2)
-    decompressed_data2 = lzw.decompress(compressed_data=compressed_data2)
-    assert decompressed_data2 == text_data2
+
+def test_compress_decompress_binary_bytes() -> None:
+    """
+    Roundtrip random binary data.
+    """
+    lzw = LZW()
+    data = os.urandom(10000)
+    compressed = lzw.compress(data=data)
+    decompressed = lzw.decompress(compressed_data=compressed)
+    assert decompressed == data
+
+
+def test_all_byte_values() -> None:
+    """
+    Roundtrip all 256 possible byte values.
+    """
+    lzw = LZW()
+    data = bytes(range(256))
+    compressed = lzw.compress(data=data)
+    decompressed = lzw.decompress(compressed_data=compressed)
+    assert decompressed == data
+
+
+def test_dict_reset() -> None:
+    """
+    Feed enough unique data to trigger a dictionary reset and verify roundtrip.
+    """
+    lzw = LZW()
+    # ~200KB of random data: each byte is essentially unique in context,
+    # adding ~1 dict entry per byte and filling the 65279-entry table ~3 times.
+    data = os.urandom(200000)
+    compressed = lzw.compress(data=data)
+    assert RESET_CODE in compressed, "Expected at least one reset code in compressed output"
+    decompressed = lzw.decompress(compressed_data=compressed)
+    assert decompressed == data

@@ -26,6 +26,8 @@ __all__ = [
     "BY_CHUNKS"
 ]
 
+import os
+
 from pathlib import Path
 
 from pmole.utils import create_path
@@ -34,6 +36,9 @@ from pmole.globals import SLASH
 # File reading modes
 BY_LINE: int = 0
 BY_CHUNKS: int = 1
+
+DEFAULT_CHUNK_SIZE: int = 65536
+
 
 class FileHandler:
     """
@@ -46,10 +51,8 @@ class FileHandler:
         """
         Read the file data.
         """
-        # Calculate the chunks needed to read the file
         if chunks is None:
-            size = Path(self.file_path).__sizeof__()
-            chunks = int(size / threads)
+            chunks = DEFAULT_CHUNK_SIZE
 
         with open(self.file_path, "rb") as f:
             if mode == BY_CHUNKS:
@@ -65,14 +68,22 @@ class FileHandler:
         Write to the file.
         """
         file_path: str = None
-        
+
         if len(self.file_path.split(SLASH)) < 2:
             file_path = self.file_path
         else:
             file_path = create_path(
                 path=self.file_path
             )
-        
+
         with open(file_path, "w") as o:
             o.write(data)
 
+    def write_binary(self, data: bytes) -> None:
+        """
+        Write binary data to the file.
+        """
+        out = Path(self.file_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        with open(str(out), "wb") as o:
+            o.write(data)

@@ -1,21 +1,15 @@
+# pmole
 
-# Introduction
+Compress an entire codebase into a single binary `.pm` file.
+Works on text **and** binary files. Supports encryption, in-archive search, integrity verification, and single-file extraction without full decompression.
 
-Pmole is a library for compressing code bases into a single file.
-Pmole uses `.pm` file extension to create an "origin" file that will be used to reproduce the code base data.
-
-> [!NOTE]
-> The project is still in early developement, right now, compressing a directory and decompressing it will result in data being lost.
-
-# Installation
-
-You can use **pip**:
+## Installation
 
 ```bash
 pip install git+https://github.com/ramsy0dev/pmole
 ```
 
-or you can build **from source**:
+or from source:
 
 ```bash
 git clone https://github.com/ramsy0dev/pmole --depth=1
@@ -23,78 +17,316 @@ cd pmole
 pip install -e .
 ```
 
-# Usage
+---
 
-Pmole can be used as a library, as well as a cli tool.
+## Library usage
 
-* ## Library
+### Compress
 
 ```python
-from pmole.algo import LZW
+import pmole
 
-text_data = "Hello World"
+# Auto-selects the best algorithm per file (default)
+archive = pmole.compress("./myproject")                        # → "myproject.pm"
+archive = pmole.compress("./myproject", output="out.pm")
 
-lzw = LZW()
+# Force a specific algorithm for every file
+archive = pmole.compress("./myproject", algo="lzma")           # best ratio, slower
+archive = pmole.compress("./myproject", algo="zlib")           # fast, good ratio
+archive = pmole.compress("./myproject", algo="lzw")            # pure LZW
 
-compressed_data = lzw.compress(
-    data=text_data
+# Control parallelism (default threads=3)
+archive = pmole.compress("./myproject", threads=8)
+
+# Encrypt with AES-256-GCM
+archive = pmole.compress("./myproject", password="s3cr3t")
+```
+
+### List contents
+
+```python
+entries = pmole.list_files(archive)
+for e in entries:
+    print(f"{e.path:40s}  {e.original_size:>8} B  "
+          f"ratio={e.compression_ratio:.2f}  [{e.algo_name}]  "
+          f"{'binary' if e.is_binary else 'text'}")
+
+# Encrypted archive
+entries = pmole.list_files(archive, password="s3cr3t")
+```
+
+### Extract and decompress
+
+```python
+# Extract one file
+out = pmole.extract(archive, "myproject/main.py", output_dir="/tmp/out")
+
+# Decompress entire archive; returns list of paths written
+paths = pmole.decompress(archive, output_dir="/tmp/restored")
+paths = pmole.decompress(archive, output_dir="/tmp/restored", threads=8)
+
+# Encrypted archive
+paths = pmole.decompress(archive, output_dir="/tmp/restored", password="s3cr3t")
+```
+
+### Codebase tools
+
+```python
+# Search for a regex pattern across all text files (nothing written to disk)
+matches = pmole.search(archive, r"def \w+\(")
+for m in matches:
+    print(f"{m['path']}:{m['line_no']}: {m['line']}")
+
+# Verify every file decompresses correctly (nothing written to disk)
+results = pmole.verify(archive)
+failures = [r for r in results if not r["ok"]]
+
+# Compression statistics grouped by file extension
+s = pmole.stats(archive)
+print(f"{s['total_files']} files, "
+      f"{s['total_original']} B → {s['total_compressed']} B")
+for ext, bucket in s["by_extension"].items():
+    ratio = bucket["compressed"] / bucket["original"]
+    print(f"  {ext}: {bucket['files']} files, ratio={ratio:.2f}")
+
+# Check whether an archive is password-protected
+pmole.is_encrypted(archive)  # → True / False
+```
+
+### Raw algorithm access
+
+```python
+# LZW only
+codes = pmole.lzw_compress(b"hello world hello world")
+data  = pmole.lzw_decompress(codes)
+
+# Any algorithm by constant
+from pmole import ALGO_LZMA
+from pmole.compression import compress_with_algo, decompress_with_algo
+
+compressed = compress_with_algo(b"hello world", ALGO_LZMA)
+original   = decompress_with_algo(compressed, ALGO_LZMA)
+```
+
+---
+
+## Encryption
+
+`compress(..., password="...")` encrypts the archive with **AES-256-GCM**.
+
+| Property         | Value                                        |
+|------------------|----------------------------------------------|
+| Cipher           | AES-256-GCM (authenticated encryption)       |
+| Key derivation   | PBKDF2-HMAC-SHA256, 260 000 iterations       |
+| Salt             | 16 random bytes (unique per archive)         |
+| Nonce            | 12 random bytes (unique per archive)         |
+| Envelope magic   | `PME\x01` (distinct from plain `.pm`)        |
+| Overhead         | 48 bytes over the compressed archive size    |
+
+An incorrect password raises `ValueError` immediately — the GCM authentication tag fails before any data is returned. All read operations (`decompress`, `list_files`, `extract`, `verify`, `search`, `stats`) accept the same `password` parameter.
+
+The `PMOLE_PASSWORD` environment variable is used by the CLI as a fallback so the password is never visible in shell history.
+
+---
+
+## Compression algorithms
+
+Four algorithms are available. Use `algo="auto"` (the default) to let pmole benchmark each one per file and keep the smallest result.
+
+| Constant        | Name        | Description                                                      | Best for                        |
+|-----------------|-------------|------------------------------------------------------------------|---------------------------------|
+| `ALGO_LZW`      | `"lzw"`     | Pure LZW, codes packed as uint16 LE                              | Highly repetitive data          |
+| `ALGO_LZW_ZLIB` | `"lzw+zlib"`| LZW uint16 stream further compressed with zlib                   | Repetitive text with patterns   |
+| `ALGO_ZLIB`     | `"zlib"`    | zlib / DEFLATE (LZ77 + Huffman), Python built-in                 | Source code, mixed content      |
+| `ALGO_LZMA`     | `"lzma"`    | LZMA, Python built-in                                            | Best ratio, any content         |
+
+> **Note:** LZW-based algorithms (`lzw`, `lzw+zlib`) are automatically skipped for files larger than 10 MB; only `zlib` and `lzma` are tried for large files.
+
+---
+
+## `ArchiveEntry`
+
+`list_files()` returns a list of `ArchiveEntry` dataclass instances:
+
+| Field               | Type    | Description                                      |
+|---------------------|---------|--------------------------------------------------|
+| `path`              | `str`   | Archived path (forward slashes)                  |
+| `original_size`     | `int`   | Uncompressed size in bytes                       |
+| `compressed_size`   | `int`   | Compressed size in bytes                         |
+| `is_binary`         | `bool`  | Detected as binary (metadata only)               |
+| `algo`              | `int`   | Algorithm ID used for this file                  |
+| `data_offset`       | `int`   | Byte offset of this file's section in archive    |
+| `compression_ratio` | `float` | `compressed_size / original_size` (property)     |
+| `algo_name`         | `str`   | Human-readable algorithm name (property)         |
+
+---
+
+## Auto-exclusion
+
+`compress()` applies five independent exclusion layers before touching any file. All defaults are exported from `pmole` and can be overridden per call.
+
+### `.pmignore` / `.gitignore`
+
+When compressing a directory, pmole looks for `.pmignore` in the root first, then `.gitignore`. If found, its patterns are applied using full gitignore semantics (`**`, negation `!`, directory anchoring `/`). `.pmignore` itself is always excluded from the archive.
+
+Create a `.pmignore` to override or extend `.gitignore` patterns for archiving:
+
+```
+# .pmignore
+*.log
+scratch/
+local_settings.py
+```
+
+### File extensions — `EXCLUDE_EXTENSIONS`
+
+Files whose suffix (case-insensitive, no leading dot) matches are skipped.
+
+| Category              | Extensions                                                                 |
+|-----------------------|----------------------------------------------------------------------------|
+| Compiled / executable | `exe` `dll` `so` `dylib` `ko` `sys` `efi` `lib` `a` `o` `obj` `out` `elf` `bin` `wasm` `app` `msi` `bat` `cmd` |
+| Python bytecode       | `pyc` `pyo` `pyd`                                                          |
+| JVM / .NET            | `class` `jar` `pdb`                                                        |
+| Mobile / embedded     | `apk` `ipa` `xex` `xbe` `3dsx`                                            |
+| Game engine           | `pak` `gdc` `pck` `uasset`                                                |
+| Raw / firmware        | `img` `hex` `srec` `rom` `bios` `bootloader` `boot`                       |
+| Archives              | `zip` `gz` `bz2` `xz` `zst` `lz4` `7z` `rar` `tar` `tgz` `tbz2` `txz`  |
+| Images                | `png` `jpg` `jpeg` `gif` `bmp` `tiff` `tif` `webp` `avif` `heic` `ico`   |
+| Audio / video         | `mp3` `mp4` `wav` `flac` `ogg` `aac` `m4a` `avi` `mkv` `mov` `wmv` `flv` `webm` |
+| Fonts                 | `ttf` `otf` `woff` `woff2` `eot`                                          |
+| Databases             | `sqlite` `sqlite3` `db` `mdb` `accdb`                                     |
+| Lock files            | `lock`                                                                     |
+| Source maps           | `map`                                                                      |
+| Log / temp            | `log` `tmp` `bak` `swp` `swo`                                             |
+
+### Directories — `EXCLUDE_DIRECTORIES`
+
+Any path component (between the root and the file) that matches is skipped, case-insensitively.
+
+| Category              | Names                                                                                   |
+|-----------------------|-----------------------------------------------------------------------------------------|
+| Version control       | `.git` `.svn` `.hg` `.bzr`                                                              |
+| Python                | `__pycache__` `venv` `.venv` `env` `.env` `.tox` `.mypy_cache` `.pytest_cache` `.ruff_cache` `.pytype` `.pyre` `htmlcov` `.eggs` `.egg-info` |
+| Node / JS             | `node_modules` `.next` `.nuxt` `.svelte-kit` `.turbo` `.parcel-cache`                   |
+| Build outputs         | `build` `dist` `out` `bin` `obj` `target` `.gradle`                                    |
+| IDEs / editors        | `.idea` `.vscode` `.vs` `.eclipse` `.fleet`                                             |
+| Package caches        | `.m2` `.bundle` `vendor`                                                                |
+| Test / coverage       | `coverage` `cov` `.coverage`                                                            |
+| Misc generated        | `lib` `libs` `assets` `res` `resources` `static` `public` `cache` `.cache` `tmp` `temp` `fonts` `media` `data` `.terraform` `.docker` |
+
+### Filenames — `EXCLUDE_FILENAMES`
+
+Exact filename match, case-insensitive.
+
+| File           | Reason                                  |
+|----------------|-----------------------------------------|
+| `.DS_Store`    | macOS directory metadata                |
+| `Thumbs.db`    | Windows thumbnail cache                 |
+| `desktop.ini`  | Windows folder settings                 |
+| `.env`         | Runtime secrets (archive `.env.example` instead) |
+| `.swp` `.swo`  | Vim swap files                          |
+| `.pmignore`    | pmole ignore file (meta — not archived) |
+
+### File size — `MAX_FILE_SIZE_BYTES`
+
+Files larger than **50 MB** (default) are skipped with an info log. Override per call:
+
+```python
+pmole.compress("./data", max_file_size_bytes=10 * 1024 * 1024)  # 10 MB cap
+```
+
+### Customising filters
+
+All four lists are exported at the top level. Pass replacements directly to `compress()`:
+
+```python
+import pmole
+
+# Extend the defaults
+pmole.compress(
+    "./myproject",
+    exclude_extensions=[*pmole.EXCLUDE_EXTENSIONS, "csv", "parquet"],
+    exclude_directories=[*pmole.EXCLUDE_DIRECTORIES, "migrations"],
+    exclude_filenames=[*pmole.EXCLUDE_FILENAMES, "secrets.json"],
+    max_file_size_bytes=5 * 1024 * 1024,
 )
 
-decompressed_data = lzw.decompress(
-    compressed_data=compressed_data
-)
+# Or replace them entirely
+pmole.compress("./myproject", exclude_extensions=[], exclude_directories=[])
 ```
 
-* ## CLI
+---
 
-Compressing a single source file:
+## CLI usage
 
 ```bash
-pmole compress --file-path /path/to/file
+# Compress a directory (auto algorithm, 3 threads)
+pmole compress ./myproject
+
+# Force a specific algorithm
+pmole compress ./myproject --algo lzma
+pmole compress ./myproject -a zlib
+
+# Compress a single file
+pmole compress ./README.md
+
+# Custom output path, more threads
+pmole compress ./myproject -o out.pm -t 8
+
+# Encrypt the archive
+pmole compress ./myproject -p mysecret
+# or via environment variable (keeps password out of shell history)
+PMOLE_PASSWORD=mysecret pmole compress ./myproject
+
+# Add extra exclusions
+pmole compress ./myproject \
+    --exclude-dir ".cache,scratch" \
+    --exclude-ext "csv,parquet" \
+    --exclude-name "local_settings.py"
+
+# List archive contents (no decompression)
+pmole list myproject.pm
+pmole list myproject.pm -p mysecret            # encrypted
+
+# Show directory tree structure
+pmole tree myproject.pm
+
+# Extract one file (optional output dir, default = current dir)
+pmole extract myproject.pm myproject/main.py /tmp/out
+
+# Decompress full archive (optional output dir, default = current dir)
+pmole decompress myproject.pm /tmp/restored
+pmole decompress myproject.pm -t 8             # more threads
+pmole decompress myproject.pm -p mysecret      # encrypted
+
+# Verify archive integrity (no disk writes)
+pmole verify myproject.pm
+
+# Search for a regex pattern in all text files (no disk writes)
+pmole search myproject.pm "def \w+"
+pmole search myproject.pm "TODO|FIXME"
+
+# Show compression statistics grouped by file extension
+pmole stats myproject.pm
+
+# Diff two files
+pmole diff a.py b.py
 ```
 
-Compressing a code base directory:
+---
 
-```bash
-pmole compress --dir-path /path/to/file
-```
+## `.pm` format overview
 
-Decompressing:
+A `.pm` file (magic `PM\x03\x00`) has three sections:
 
-```bash
-pmole decompress --pm-file-path /path/to/output.pm
-```
+1. **Header** (16 bytes) — magic, file count, byte offset to the index table.
+2. **File sections** — one per stored file: an 18-byte header (`original_size`, `compressed_size`, `is_binary`, `algo`) followed by the compressed payload.
+3. **Index table** (at end) — one entry per file storing its path, sizes, algorithm, and `data_offset`, enabling listing and single-file extraction by seeking directly to the right section.
 
-# Example
+When encrypted, the entire `.pm` content is wrapped in an **encrypted envelope** (magic `PME\x01`, 32-byte header containing salt and nonce, followed by the AES-256-GCM ciphertext). See [ARCHITECTURE.md](ARCHITECTURE.md) for the full byte-level specification.
 
-The .pm output file will look something like this:
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full byte-level specification and design rationale.
 
-```
-:: .\data\hello_world.txt
-
--- 72 101 32 115 116 97 114 101 100 32 111 117 116 32 116 104 65537 119 105
--- 110 100 111 119 32 97 65548 65550 65537 115 110 65557 121 32 102 105 101 108 100
--- 46 32 65536 39 65544 98 101 101 110 65538 116 117 99 107 32 65554 65549 65551 32
--- 104 65546 115 65537 102 111 114 32 99 108 111 65595 65549 111 65559 32 109 111 110
--- 65550 65559 65555 65592 105 115 65545 110 108 65567 118 65570 65558 111 102 65590 65537 65546 116
--- 115 105 100 65552 65598 65572 32 119 97 65617 65550 114 65546 103 104 65627 65637 65554 65556
--- 119 65574 84 65551 65542 65637 65639 110 39 65548 109 65585 65645 116 65606 65595 101 65574 73
--- 65548 65638 65617 65609 65539 65620 32 106 117 65539 65646 65569 65571 65544 65553 65612 97 65582 111
--- 99 99 65639 105 65610 97 108 32 98 105 114 65544 65598 65538 109 65693 65694 65685 105
--- 65702 65694 119 65593 32 118 65581 65584 65542 65544 65554 65663 65679 65570 65572 65574 65 65617 65591
--- 99 65610 116 65554 117 65543 65605 65583 65541 65628 65547 65646 65553 65555 65557 44 65592 65634 65555
--- 101 65715 65592 65557 65608 65661 32 65602 110 103 65745 65742 65577 65695 65563 104 97 65586 108
--- 65731 65718 65562 65583 65580 65694 98 65541 65588 110 65631 65633 65646 65593 65677 101 [EOF]
-```
-
-And the decompressed data is:
-
-```
-He stared out the window at the snowy field. He'd been stuck in the house for close to a month and his only view of the outside world was through the window. There wasn't much to see. It was mostly just the field with an occasional bird or small animal who ventured into the field. As he continued to stare out the window, he wondered how much longer he'd be shackled to the steel bar inside the house
-```
-
-every file path starts with `::` while the compressed data of that file starts with `--`, the end of the compressed data is marked by `[EOF]`, that's where the pmole stops adding tokens to the buffer and decompresses it.
-
-# LICENSE
+## LICENSE
 
 [MIT](https://github.com/ramsy0dev/pmole/blob/main/LICENSE)

@@ -20,16 +20,52 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 
-# Init logger
-from loguru import logger
+__all__ = [
+    # High-level API
+    "compress",
+    "decompress",
+    "list_files",
+    "extract",
+    "verify",
+    "search",
+    "stats",
+    "is_encrypted",
+    "lzw_compress",
+    "lzw_decompress",
+    "ArchiveEntry",
+    # Algorithm constants
+    "ALGO_LZW",
+    "ALGO_LZW_ZLIB",
+    "ALGO_ZLIB",
+    "ALGO_LZMA",
+    "ALGO_NAMES",
+    # Low-level class (advanced use)
+    "Pmole",
+    # Default filter lists (copy and modify to customise)
+    "EXCLUDE_EXTENSIONS",
+    "EXCLUDE_DIRECTORIES",
+    "EXCLUDE_FILENAMES",
+    "MAX_FILE_SIZE_BYTES",
+]
 
-logger.add("pmole.log", rotation="10 MB")
-
-# Global constants and variables
-from pmole.globals import *
-
-# Utils
-from pmole.utils import *
-
-# Main classes
+from pmole.api import (
+    compress,
+    decompress,
+    list_files,
+    extract,
+    verify,
+    search,
+    stats,
+    is_encrypted,
+    lzw_compress,
+    lzw_decompress,
+    ArchiveEntry,
+)
+from pmole.compression import ALGO_LZW, ALGO_LZW_ZLIB, ALGO_ZLIB, ALGO_LZMA, ALGO_NAMES
 from pmole.pmole import Pmole
+from pmole.globals import (
+    EXCLUDE_EXTENSIONS,
+    EXCLUDE_DIRECTORIES,
+    EXCLUDE_FILENAMES,
+    MAX_FILE_SIZE_BYTES,
+)

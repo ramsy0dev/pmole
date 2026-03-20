@@ -21,7 +21,6 @@
 # SOFTWARE.
 
 __all__ = [
-    "Nodes",
     "get_platform",
     "measure_time",
     "check_file_path",
@@ -158,54 +157,74 @@ def split_data_to_batches(data_n: int, k: int) -> list:
     
     return batches
 
-def list_files_in_directory(directory: str, exclude_directories: list[str], exclude_extensions: list[str]) -> list[str]:
+def list_files_in_directory(
+    directory: str,
+    exclude_directories: list[str],
+    exclude_extensions: list[str],
+    exclude_filenames: list[str] | None = None,
+    max_file_size_bytes: int | None = None,
+) -> list[str]:
     """
-    List all files in a directory recursively, excluding files based on EXCLUDE_EXTENSIONS
-    and EXCLUDE_DIRECTORIES criteria.
+    List all files in a directory recursively, applying four independent
+    exclusion filters:
+
+    * **extension** — case-insensitive suffix match (e.g. ``"pyc"``)
+    * **directory name** — any path component between the root and the file
+    * **filename** — exact filename match, case-insensitive
+    * **size** — files larger than *max_file_size_bytes* are skipped
     """
-    all_files = []
-    excluded_files = []
+    exclude_extensions_lower  = {ext.lower() for ext in exclude_extensions}
+    exclude_directories_lower = {d.lower() for d in exclude_directories}
+    exclude_filenames_lower   = {fn.lower() for fn in (exclude_filenames or [])}
 
-    # Convert to lowercase for case-insensitive matching
-    exclude_extensions_lower = {ext.lower() for ext in exclude_extensions}
-    exclude_directories_lower = {dir_name.lower() for dir_name in exclude_directories}
+    included: list[str] = []
+    excluded_count = 0
 
-    # Check for excluded directories
-    for file_path in Path(directory).rglob('*'):
+    for file_path in Path(directory).rglob("*"):
         if not file_path.is_file():
             continue
 
         file_str = str(file_path)
-        all_files.append(file_str)
+        reason: str | None = None
 
-        # Check if file should be excluded based on extension
-        file_extension = file_path.suffix.lower().lstrip('.')
-        if file_extension in exclude_extensions_lower:
-            logger.info(f"Excluded file '{file_str}' (extension: {file_extension})")
-            excluded_files.append(file_str)
-            continue
+        # 1. Filename exclusion
+        if file_path.name.lower() in exclude_filenames_lower:
+            reason = f"filename: {file_path.name}"
 
-        # Check if file is in an excluded directory (relative to root directory)
-        # Only check path components that are children of the root directory
-        file_relative_parts = [part.lower() for part in file_path.relative_to(directory).parts]
-        excluded_dir = None
-        for part in file_relative_parts[:-1]:  # Exclude the filename itself
-            if part in exclude_directories_lower:
-                excluded_dir = part
-                break
+        # 2. Extension exclusion
+        elif file_path.suffix.lower().lstrip(".") in exclude_extensions_lower:
+            reason = f"extension: {file_path.suffix}"
 
-        if excluded_dir:
-            logger.info(f"Excluded file '{file_str}' (in directory: {excluded_dir})")
-            excluded_files.append(file_str)
-            continue
+        # 3. Directory exclusion
+        else:
+            rel_parts = [p.lower() for p in file_path.relative_to(directory).parts[:-1]]
+            hit = next((p for p in rel_parts if p in exclude_directories_lower), None)
+            if hit:
+                reason = f"directory: {hit}"
 
-    # Log summary
-    included_count = len(all_files) - len(excluded_files)
-    if excluded_files:
-        logger.info(f"File filtering complete: {len(all_files)} found, {len(excluded_files)} excluded, {included_count} will be processed")
+        # 4. Size exclusion
+        if reason is None and max_file_size_bytes is not None:
+            try:
+                size = os.path.getsize(file_str)
+                if size > max_file_size_bytes:
+                    reason = f"size: {size} > {max_file_size_bytes} bytes"
+            except OSError:
+                pass
 
-    # Return only the included files
-    return [f for f in all_files if f not in excluded_files]
+        if reason:
+            logger.info(f"Excluded '{file_str}' ({reason})")
+            excluded_count += 1
+        else:
+            included.append(file_str)
+
+    total = len(included) + excluded_count
+    if excluded_count:
+        logger.info(
+            f"File filtering: {total} found, {excluded_count} excluded, "
+            f"{len(included)} will be processed"
+        )
+
+    return included
 
 def replace_unsupported_characters(input_string: str, placeholder: str = "?") -> str:
     return ''.join(char if wcwidth.wcwidth(char) != -1 else placeholder for char in input_string)

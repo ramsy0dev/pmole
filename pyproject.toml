@@ -12,6 +12,8 @@ loguru = "^0.7.3"
 typer = "^0.15.3"
 pytest = "^9.0.2"
 wcwidth = "^0.2.14"
+cryptography = ">=42.0"
+pathspec = ">=0.11"
 
 
 [tool.poetry.group.dev.dependencies]

@@ -26,10 +26,10 @@ __all__ = [
     "HOME_DIRECTORY",
     "ROOT_CONFIG_DIR",
     "CACHE_DIR",
-    "DICTIONARY_CACHE_FILE_PATH",
-    "REVERSE_DICTIONARY_CACHE_FILE_PATH",
     "EXCLUDE_EXTENSIONS",
-    "EXCLUDE_DIRECTORIES"
+    "EXCLUDE_DIRECTORIES",
+    "EXCLUDE_FILENAMES",
+    "MAX_FILE_SIZE_BYTES",
 ]
 
 import os
@@ -52,85 +52,149 @@ elif PLATFORM == PL_WINDOWS:
     ROOT_CONFIG_DIR = f"{HOME_DIRECTORY}{SLASH}pmole"
 
 CACHE_DIR = ROOT_CONFIG_DIR + SLASH + "cache"
-DICTIONARY_CACHE_FILE_PATH = CACHE_DIR + SLASH + "pre_generated_dictionary.json"
-REVERSE_DICTIONARY_CACHE_FILE_PATH = CACHE_DIR + SLASH + "pre_generated_reverse_dictionary.json"
 
-# Exclude extensions and directories
-EXCLUDE_EXTENSIONS = [
-    # Windows related executables
-    "exe",
-    "dll",
-    "src",
-    "bat",
-    "cmd",
-    "msi",
+# Files larger than this are skipped during compression (50 MB default).
+# Override via the API's max_file_size_bytes parameter.
+MAX_FILE_SIZE_BYTES: int = 50 * 1024 * 1024  # 50 MB
 
-    # Linux/Unix-like systems
-    "out",
-    "so",
-    "ko",
+# ---------------------------------------------------------------------------
+# Auto-exclusion: extensions
+# ---------------------------------------------------------------------------
+# Extensions are matched case-insensitively without the leading dot.
+# The list covers compiled artifacts, binary formats that are already
+# compressed, lock files, and runtime outputs that have no place in a
+# codebase snapshot.
+EXCLUDE_EXTENSIONS: list[str] = [
+    # ── Compiled / executable ───────────────────────────────────────────
+    "exe", "dll", "so", "dylib", "ko", "sys", "efi",
+    "lib", "a", "o", "obj",
+    "out", "elf", "bin", "wasm",
+    "app", "framework",
+    "msi", "bat", "cmd",
 
-    # MacOS
-    "app",
-    "dylib",
-    "framework",
+    # ── Python bytecode ─────────────────────────────────────────────────
+    "pyc", "pyo", "pyd",
 
-    # Cross-platform compiled
-    "wasm",
-    "elf",
-    "bin",
-    "img",
-    "hex",
-    "srec",
-    "rom",
+    # ── JVM / .NET ──────────────────────────────────────────────────────
+    "class", "jar",
+    "dll",          # already above, listed for clarity
+    "pdb",
 
-    # Executable containers and scripts
-    "bios",
-    "jar",
-    "class",
-    "pyc",
-    "apk",
-    "ipa",
-    "xex",
-    "xbe",
-    "3dsx",
+    # ── Mobile / embedded ───────────────────────────────────────────────
+    "apk", "ipa", "xex", "xbe", "3dsx",
 
-    # Game engines
-    "pak",
-    "gdc",
-    "pck",
-    "uasset",
+    # ── Game engine ─────────────────────────────────────────────────────
+    "pak", "gdc", "pck", "uasset",
 
-    # Raw machine code
-    "boot",
-    "sys",
-    "efi",
-    "bootloader"
+    # ── Raw / firmware ──────────────────────────────────────────────────
+    "img", "hex", "srec", "rom", "bios", "bootloader", "boot",
+
+    # ── Archives / already-compressed ───────────────────────────────────
+    # These won't benefit from a second compression pass.
+    "zip", "gz", "bz2", "xz", "zst", "lz4", "7z", "rar", "tar",
+    "tgz", "tbz2", "txz",
+
+    # ── Images ──────────────────────────────────────────────────────────
+    # Raster formats are already compressed; archiving them gains nothing.
+    "png", "jpg", "jpeg", "gif", "bmp", "tiff", "tif",
+    "webp", "avif", "heic", "ico",
+
+    # ── Audio / video ───────────────────────────────────────────────────
+    "mp3", "mp4", "wav", "flac", "ogg", "aac", "m4a",
+    "avi", "mkv", "mov", "wmv", "flv", "webm",
+
+    # ── Fonts ───────────────────────────────────────────────────────────
+    "ttf", "otf", "woff", "woff2", "eot",
+
+    # ── Database files ──────────────────────────────────────────────────
+    "sqlite", "sqlite3", "db", "mdb", "accdb",
+
+    # ── Lock files ──────────────────────────────────────────────────────
+    # Regenerable; often large; not part of source truth.
+    "lock",
+
+    # ── Source maps ─────────────────────────────────────────────────────
+    "map",
+
+    # ── Log / temp ──────────────────────────────────────────────────────
+    "log", "tmp", "bak", "swp", "swo",
 ]
 
+# ---------------------------------------------------------------------------
+# Auto-exclusion: directories
+# ---------------------------------------------------------------------------
+# Matched case-insensitively against every path component between the root
+# and the file.  Add project-specific names via the API's
+# exclude_directories parameter.
+EXCLUDE_DIRECTORIES: list[str] = [
+    # ── Version control ─────────────────────────────────────────────────
+    ".git", ".svn", ".hg", ".bzr",
 
-EXCLUDE_DIRECTORIES = [
-    ".git",
+    # ── Python ──────────────────────────────────────────────────────────
     "__pycache__",
-    "bin",
-    "build",
-    "dist",
-    "obj",
-    "out",
-    "lib",
-    "vendor",
-    "assets",
-    "res",
-    "ressources",
-    "static",
-    "public",
-    "cache",
+    "venv", ".venv", "env", ".env",
+    ".tox", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    ".pytype", ".pyre",
+    "htmlcov", ".eggs", ".egg-info",
+
+    # ── Node / JS ecosystem ─────────────────────────────────────────────
+    "node_modules",
+    ".next", ".nuxt", ".svelte-kit",
+    ".turbo", ".parcel-cache",
+
+    # ── Build outputs ───────────────────────────────────────────────────
+    "build", "dist", "out", "bin", "obj",
+    "target",          # Rust / Maven
+    ".gradle",         # Gradle cache
+
+    # ── IDEs / editors ──────────────────────────────────────────────────
+    ".idea", ".vscode", ".vs", ".eclipse", ".fleet",
+
+    # ── Package caches ──────────────────────────────────────────────────
+    ".m2",             # Maven local repo
+    ".bundle",         # Bundler (Ruby)
+    "vendor",          # Go modules / PHP Composer
+
+    # ── Test / coverage ─────────────────────────────────────────────────
+    "coverage", "cov", ".coverage",
+
+    # ── Misc generated / transient ──────────────────────────────────────
+    "lib", "libs",
+    "assets", "res", "resources", "ressources",
+    "static", "public",
+    "cache", ".cache",
+    "tmp", "temp",
+    "fonts", "media",
     "data",
-    "target",
-    "coverage",
-    "cov",
-    "tmp",
-    "temp",
-    "fonts",
-    "media"
+    ".terraform",
+    ".docker",
+    "$recycle.bin",
+    ".spotlight-v100",
+]
+
+# ---------------------------------------------------------------------------
+# Auto-exclusion: specific filenames
+# ---------------------------------------------------------------------------
+# Exact filename match (case-insensitive).  Use this for OS artifacts,
+# secret files, and other names that cannot be identified by extension alone.
+EXCLUDE_FILENAMES: list[str] = [
+    # ── OS artifacts ────────────────────────────────────────────────────
+    ".ds_store",
+    "thumbs.db",
+    "desktop.ini",
+    ".spotlight-v100",
+
+    # ── Secrets / local config ──────────────────────────────────────────
+    ".env",            # runtime secrets; archive .env.example instead
+
+    # ── Editor swap files ───────────────────────────────────────────────
+    # (also covered by extension, belt-and-suspenders for dotfiles)
+    ".swp", ".swo",
+
+    # ── Compiled Python in root ─────────────────────────────────────────
+    # (also covered by extension)
+    "__pycache__",
+
+    # ── pmole ignore files ───────────────────────────────────────────────
+    ".pmignore",
 ]
