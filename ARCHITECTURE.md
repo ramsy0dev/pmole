@@ -14,11 +14,10 @@ pmole/
 ├── crypto.py         AES-256-GCM encryption / decryption envelope
 ├── compression.py    multi-algorithm layer (LZW, LZW+zlib, zlib, lzma)
 ├── lzw.py            LZW, LZWCompressor, RESET_CODE
-├── file_handler.py   FileHandler (chunked read, write, write_binary)
 ├── cli.py            Typer CLI (compress / decompress / list / extract /
 │                               verify / search / stats / tree / diff)
 ├── globals.py        CACHE_DIR, exclusion lists, MAX_FILE_SIZE_BYTES
-└── utils.py          measure_time, list_files_in_directory, create_path, …
+└── utils.py          measure_time, list_files_in_directory, get_platform, …
 ```
 
 ### Layer diagram
@@ -42,11 +41,7 @@ User code / CLI
   Pmole.search
       │
       ▼
-  file_handler.py
-  (chunked reads, binary writes)
-      │
-      ▼
-  filesystem
+  filesystem  (Path.read_bytes / write_bytes)
 ```
 
 ---
@@ -290,7 +285,7 @@ api.compress(path, output, algo, threads, password, exclude_*, max_file_size_byt
        ├─ ThreadPoolExecutor(max_workers=threads)
        │    executor.map(_compress_file_task, files_paths)   ← parallel
        │      each task:
-       │        read full file via FileHandler
+       │        data = Path(fp).read_bytes()
        │        if algo is None: compress_auto(data)  → (algo_id, compressed)
        │        else:            compress_with_algo(data, algo)
        │    → results list in original file order
@@ -324,7 +319,8 @@ api.decompress(pm_file_path, output_dir, threads, password)
                   f.seek(data_offset + 18)
                   payload = f.read(compressed_size)
                   data = decompress_with_algo(payload, algo)
-                  FileHandler(out_path).write_binary(data)
+                  out_path.parent.mkdir(parents=True, exist_ok=True)
+                  out_path.write_bytes(data)
 ```
 
 ### list
@@ -494,24 +490,24 @@ lzw_decompress(codes: list[int]) -> bytes
 All primary inputs are positional arguments. Optional flags use short (`-x`) and long (`--xxx`) forms. The `PMOLE_PASSWORD` environment variable is accepted by all commands that take `-p/--password`.
 
 ```
-pmole compress   PATH   [-o OUTPUT] [-a ALGO] [-t THREADS] [-p PASSWORD]
-                        [--exclude-ext E] [--exclude-dir D] [--exclude-name N]
+pmole [--debug] compress   PATH   [-o OUTPUT] [-a ALGO] [-t THREADS] [-p PASSWORD]
+                                  [--exclude-ext E] [--exclude-dir D] [--exclude-name N]
 
-pmole decompress ARCHIVE  [OUTPUT_DIR]  [-t THREADS]  [-p PASSWORD]
+pmole [--debug] decompress ARCHIVE  [OUTPUT_DIR]  [-t THREADS]  [-p PASSWORD]
 
-pmole list       ARCHIVE  [-p PASSWORD]
+pmole [--debug] list       ARCHIVE  [-p PASSWORD]
 
-pmole extract    ARCHIVE  TARGET  [OUTPUT_DIR]  [-p PASSWORD]
+pmole [--debug] extract    ARCHIVE  TARGET  [OUTPUT_DIR]  [-p PASSWORD]
 
-pmole verify     ARCHIVE  [-t THREADS]  [-p PASSWORD]
+pmole [--debug] verify     ARCHIVE  [-t THREADS]  [-p PASSWORD]
 
-pmole search     ARCHIVE  PATTERN  [-t THREADS]  [-p PASSWORD]
+pmole [--debug] search     ARCHIVE  PATTERN  [-t THREADS]  [-p PASSWORD]
 
-pmole stats      ARCHIVE  [-p PASSWORD]
+pmole [--debug] stats      ARCHIVE  [-p PASSWORD]
 
-pmole tree       ARCHIVE  [-p PASSWORD]
+pmole [--debug] tree       ARCHIVE  [-p PASSWORD]
 
-pmole diff       FILE1  FILE2
+pmole [--debug] diff       FILE1  FILE2
 ```
 
 | Command      | Positional args                   | Key options                                          | Delegates to          |
@@ -527,6 +523,27 @@ pmole diff       FILE1  FILE2
 | `diff`       | `FILE1` `FILE2`                   | —                                                    | `utils.show_diff()`   |
 
 `PATH` for `compress` is auto-detected as file or directory. `OUTPUT_DIR` defaults to `.`. `--threads` defaults to `3`. `setup_cli_dir()` creates `CACHE_DIR` on startup.
+
+### Logging (`configure_logging`)
+
+`configure_logging(debug: bool)` is called in two places:
+
+1. Inside `run()` before `cli()` starts — sets the normal format so any log that fires during Typer's own startup has a consistent format.
+2. Inside `@cli.callback()` — re-applies after Typer parses `--debug`, which may upgrade the format to debug mode.
+
+```python
+# Normal mode  (default)
+fmt = "<level>{level: <8}</level>  {message}"
+logger.add(sys.stderr, level="INFO", ...)
+
+# Debug mode  (pmole --debug …)
+fmt = "<dim>{time:HH:mm:ss}</dim>  <level>{level: <8}</level>  <dim>[{name}:{line}]</dim>  {message}"
+logger.add(sys.stderr, level="DEBUG", ...)
+```
+
+The `@cli.callback()` mechanism makes `--debug` a true global flag — it is parsed and applied before Typer dispatches to any sub-command, so debug output covers the entire operation including file filtering and compression.
+
+Per-file exclusion log lines (one per excluded file in `list_files_in_directory`) are emitted at `DEBUG` level and therefore suppressed in normal mode, keeping standard output clean on large trees.
 
 ---
 
@@ -565,3 +582,56 @@ pmole diff       FILE1  FILE2
 **`.pmignore` / `.gitignore` as a fifth filter layer.** The four built-in exclusion filters cover common artifacts universally. Project-specific exclusions (generated files, local scripts, data exports) are better expressed in a version-controlled ignore file. Reading `.pmignore` first (then falling back to `.gitignore`) lets the archive respect the same exclusions as the version control system without duplicating configuration. `pathspec` is used for correct gitignore semantics including `**`, negation, and anchoring.
 
 **Four exclusion filters, applied cheapest-first.** Filename and extension checks are pure dict lookups; directory and size checks follow. The `stat` call for size is only made after all name-based filters pass, minimising syscalls on large trees.
+
+---
+
+## Test Suite
+
+```
+tests/
+├── conftest.py           benchmark fixture fallback
+├── test_api.py           integration smoke tests
+├── test_algo_lzw.py      LZW unit tests
+├── test_credibility.py   correctness + ratio-bound tests
+└── test_benchmark.py     performance benchmarks
+```
+
+### `test_credibility.py`
+
+Answers the question "does pmole actually work correctly across all inputs?" without relying on integration-level API calls. Tests are grouped by concern:
+
+| Class / function | What it proves |
+|---|---|
+| `TestEdgeCaseRoundtrips` | Every algorithm handles empty bytes, single byte, all-zeros, all-`0xFF`, every byte value (0–255), binary with nulls, 200 KB repetitive data, 500 KB random bytes, and produces deterministic output. |
+| `TestCompressionRatios` | Repetitive data < 20%, source code < 50%, all-zeros < 2%, random < 110% of original — per algorithm. LZMA < zlib on source code. LZW+zlib < raw LZW on source code. |
+| `TestAutoSelection` | `compress_auto` output ≤ every individual algorithm's output (it tried them all). Achieves < 5% ratio on repetitive data. Returns a valid algo ID. Roundtrips correctly for all data profiles including empty bytes. |
+| `TestArchiveIntegrity` | `original_size` in index matches disk. `compression_ratio` field is arithmetically correct. Binary detection is accurate. Byte-identical double roundtrip. Deep paths and Unicode content survive. Empty files restore as zero bytes. Exact file count preserved. `algo_name` in index matches requested algorithm. `verify()` passes for all algorithm strings. |
+| `TestCorruptDetection` | Wrong magic bytes → empty list returned (no crash). Truncated archive → controlled exception or empty list (no crash). |
+| `test_ratio_summary_table` | Prints a formatted ratio table across all four algorithms and four data profiles. Always passes; visible with `pytest -s`. |
+
+### `test_benchmark.py`
+
+Answers "how fast is each algorithm?" using the `benchmark` fixture (pytest-benchmark when installed; single-shot fallback otherwise). Groups:
+
+| Group | What's measured |
+|---|---|
+| Raw compress | `compress_with_algo` throughput on 100 KB of repetitive text, Python source, JSON, random bytes — parametrised by all four algorithms. |
+| Raw decompress | `decompress_with_algo` throughput on pre-compressed data — parametrised by algorithm. |
+| Auto-select | `compress_auto` wall time on each data profile (overhead of trying all candidates). |
+| Archive creation | `pmole.compress` on a 50-file tree with every algorithm string (`lzw`, `lzw+zlib`, `zlib`, `lzma`, `auto`) and on a 5-large-file tree with `zlib` and `lzma`. |
+| Archive decompression | `pmole.decompress` for small and large trees. |
+| Thread scaling | Compress and decompress at 1 / 2 / 4 threads to surface parallelism gains or regressions. |
+| Verify / search | End-to-end timing of `pmole.verify` and `pmole.search` across a 50-file archive. |
+
+### `conftest.py`
+
+```python
+try:
+    import pytest_benchmark   # real fixture injected by plugin
+except ImportError:
+    @pytest.fixture
+    def benchmark():
+        return _NullBenchmark()   # calls fn once, records elapsed time
+```
+
+When `pytest-benchmark` is installed its plugin registers the `benchmark` fixture globally. When it is not, `conftest.py` provides a minimal single-shot stand-in so `test_benchmark.py` always runs without requiring the extra dependency.

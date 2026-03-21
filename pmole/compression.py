@@ -50,13 +50,13 @@ __all__ = [
     "compress_auto",
 ]
 
-import zlib
 import lzma
 import struct
+import zlib
 
 from loguru import logger
 
-from pmole.lzw import LZWCompressor, LZW
+from pmole.lzw import LZW, LZWCompressor
 
 # Algorithm IDs stored in every FILE SECTION header
 ALGO_LZW      = 0
@@ -168,11 +168,11 @@ def compress_auto(data: bytes) -> tuple[int, bytes]:
                 best_algo = algo
                 best_bytes = compressed
         except Exception as exc:
-            logger.warning(f"Algorithm {ALGO_NAMES.get(algo, algo)} failed: {exc}")
+            logger.warning(f"algo {ALGO_NAMES.get(algo, algo)} failed: {exc}")
 
+    ratio = len(best_bytes) / len(data)
     logger.debug(
-        f"compress_auto: {ALGO_NAMES[best_algo]} "
-        f"({len(best_bytes)} / {len(data)} bytes, "
-        f"ratio={len(best_bytes)/len(data):.2f})"
+        f"compress_auto  {ALGO_NAMES[best_algo]}"
+        f"  {len(best_bytes)}/{len(data)} B  ratio={ratio:.2f}"
     )
     return best_algo, best_bytes

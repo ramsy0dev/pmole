@@ -260,6 +260,9 @@ pmole.compress("./myproject", exclude_extensions=[], exclude_directories=[])
 ## CLI usage
 
 ```bash
+# Enable debug output (timestamps + source location on every log line)
+pmole --debug compress ./myproject
+
 # Compress a directory (auto algorithm, 3 threads)
 pmole compress ./myproject
 
@@ -313,6 +316,24 @@ pmole stats myproject.pm
 pmole diff a.py b.py
 ```
 
+### Debug output
+
+`--debug` is a global flag that must come **before** the sub-command name. It switches the log format from the terse default to a timestamped form that includes the source file and line number — useful when diagnosing slow archives or unexpected exclusions.
+
+```
+# Normal output (default)
+INFO      scan  42 source files
+INFO      pack  src/utils.py  8120 B → 1943 B  [lzma]
+INFO      wrote  myproject.pm
+
+# Debug output  (pmole --debug compress …)
+14:23:01  DEBUG     [utils.py:215]   Excluded 'src/vendor/jquery.min.js' (extension: js)
+14:23:01  DEBUG     [compression.py:173]  compress_auto  lzma  1823/4096 B  ratio=0.44
+14:23:01  INFO      scan  42 source files
+```
+
+Per-file exclusion lines (`Excluded '…'`) are only shown in debug mode; they are suppressed at the default INFO level to keep normal output clean.
+
 ---
 
 ## `.pm` format overview
@@ -326,6 +347,36 @@ A `.pm` file (magic `PM\x03\x00`) has three sections:
 When encrypted, the entire `.pm` content is wrapped in an **encrypted envelope** (magic `PME\x01`, 32-byte header containing salt and nonce, followed by the AES-256-GCM ciphertext). See [ARCHITECTURE.md](ARCHITECTURE.md) for the full byte-level specification.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full byte-level specification and design rationale.
+
+## Testing
+
+```bash
+# Run all tests
+pytest
+
+# Run only the fast correctness + credibility suite
+pytest tests/test_api.py tests/test_credibility.py tests/test_algo_lzw.py
+
+# Run benchmarks (single iteration each, no stats)
+pytest tests/test_benchmark.py -v
+
+# Run benchmarks with full statistics (requires pytest-benchmark)
+pip install pytest-benchmark
+pytest tests/test_benchmark.py -v --benchmark-sort=mean
+
+# Print the compression ratio table
+pytest -s tests/test_credibility.py::test_ratio_summary_table
+```
+
+### Test files
+
+| File | Purpose |
+|---|---|
+| `tests/test_api.py` | Integration smoke tests for the public API (compress, decompress, encrypt, verify, search, stats, exclusions) |
+| `tests/test_algo_lzw.py` | Unit tests for the raw LZW compressor / decompressor |
+| `tests/test_credibility.py` | Quantitative correctness and ratio-bound tests — edge-case roundtrips (empty, single byte, all-zeros, all-`0xFF`, 200 KB repetitive, 500 KB random), ratio thresholds per algorithm, auto-selection invariants, archive metadata accuracy, double-roundtrip identity, unicode content, corrupt-archive handling |
+| `tests/test_benchmark.py` | Performance benchmarks for raw compress/decompress throughput per algorithm, auto-select overhead, full archive creation/restoration, thread-scaling (1 / 2 / 4 threads), and verify/search timing |
+| `tests/conftest.py` | Provides a minimal `benchmark` fixture when `pytest-benchmark` is not installed so the benchmark tests always run |
 
 ## LICENSE
 

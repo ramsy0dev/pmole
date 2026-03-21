@@ -49,23 +49,23 @@ __all__ = [
 ]
 
 from pmole.api import (
+    ArchiveEntry,
     compress,
     decompress,
-    list_files,
     extract,
-    verify,
-    search,
-    stats,
     is_encrypted,
+    list_files,
     lzw_compress,
     lzw_decompress,
-    ArchiveEntry,
+    search,
+    stats,
+    verify,
 )
-from pmole.compression import ALGO_LZW, ALGO_LZW_ZLIB, ALGO_ZLIB, ALGO_LZMA, ALGO_NAMES
-from pmole.pmole import Pmole
+from pmole.compression import ALGO_LZMA, ALGO_LZW, ALGO_LZW_ZLIB, ALGO_NAMES, ALGO_ZLIB
 from pmole.globals import (
-    EXCLUDE_EXTENSIONS,
     EXCLUDE_DIRECTORIES,
+    EXCLUDE_EXTENSIONS,
     EXCLUDE_FILENAMES,
     MAX_FILE_SIZE_BYTES,
 )
+from pmole.pmole import Pmole

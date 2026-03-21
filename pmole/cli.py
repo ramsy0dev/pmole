@@ -23,32 +23,64 @@
 __all__ = ["run"]
 
 import os
+import sys
 from pathlib import Path
-from typing import Optional
 
 import typer
 from loguru import logger
 
 from pmole.api import (
     compress as api_compress,
+)
+from pmole.api import (
     decompress as api_decompress,
-    list_files as api_list_files,
+)
+from pmole.api import (
     extract as api_extract,
-    verify as api_verify,
+)
+from pmole.api import (
+    list_files as api_list_files,
+)
+from pmole.api import (
     search as api_search,
+)
+from pmole.api import (
     stats as api_stats,
-    is_encrypted as api_is_encrypted,
+)
+from pmole.api import (
+    verify as api_verify,
 )
 from pmole.compression import ALGO_NAMES
 from pmole.globals import (
     CACHE_DIR,
-    EXCLUDE_EXTENSIONS,
     EXCLUDE_DIRECTORIES,
+    EXCLUDE_EXTENSIONS,
     EXCLUDE_FILENAMES,
 )
 from pmole.utils import check_file_path, show_diff
 
 cli = typer.Typer(no_args_is_help=True)
+
+
+def configure_logging(debug: bool = False) -> None:
+    logger.remove()
+    if debug:
+        fmt = (
+            "<dim>{time:HH:mm:ss}</dim>  <level>{level: <8}</level>"
+            "  <dim>[{name}:{line}]</dim>  {message}"
+        )
+        logger.add(sys.stderr, level="DEBUG", format=fmt, colorize=True)
+    else:
+        fmt = "<level>{level: <8}</level>  {message}"
+        logger.add(sys.stderr, level="INFO", format=fmt, colorize=True)
+
+
+@cli.callback()
+def _global_options(
+    debug: bool = typer.Option(False, "--debug", help="Enable debug output."),
+) -> None:
+    configure_logging(debug=debug)
+
 
 _VALID_ALGO_NAMES = ", ".join(f'"{n}"' for n in ["auto", *ALGO_NAMES.values()])
 
@@ -99,15 +131,21 @@ def _build_tree(paths: list[str]) -> str:
 @cli.command()
 def compress(
     path: str = typer.Argument(..., help="File or directory to compress."),
-    output: Optional[str] = typer.Option(None, "-o", "--output", help="Output .pm path."),
+    output: str | None = typer.Option(None, "-o", "--output", help="Output .pm path."),
     algo: str = typer.Option("auto", "-a", "--algo", help=f"Algorithm: {_VALID_ALGO_NAMES}."),
     threads: int = typer.Option(3, "-t", "--threads", help="Parallel threads."),
-    password: Optional[str] = typer.Option(
+    password: str | None = typer.Option(
         None, "-p", "--password", envvar="PMOLE_PASSWORD", help=_PASSWORD_HELP
     ),
-    exclude_ext: str = typer.Option("", "--exclude-ext", help="Comma-separated extra extensions to exclude."),
-    exclude_dir: str = typer.Option("", "--exclude-dir", help="Comma-separated extra directories to exclude."),
-    exclude_name: str = typer.Option("", "--exclude-name", help="Comma-separated extra filenames to exclude."),
+    exclude_ext: str = typer.Option(
+        "", "--exclude-ext", help="Comma-separated extra extensions to exclude."
+    ),
+    exclude_dir: str = typer.Option(
+        "", "--exclude-dir", help="Comma-separated extra directories to exclude."
+    ),
+    exclude_name: str = typer.Option(
+        "", "--exclude-name", help="Comma-separated extra filenames to exclude."
+    ),
 ):
     """Compress a file or directory into a .pm archive."""
     p = Path(path)
@@ -140,10 +178,10 @@ def compress(
             exclude_filenames=exc_names,
         )
         enc_note = " (encrypted)" if password else ""
-        logger.info(f"Archive created: '{archive}'{enc_note}")
+        logger.info(f"done  →  {archive}{enc_note}")
     except (FileNotFoundError, ValueError) as e:
         logger.error(str(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @cli.command()
@@ -151,7 +189,7 @@ def decompress(
     archive: str = typer.Argument(..., help="Path to the .pm archive."),
     output_dir: str = typer.Argument(".", help="Directory to restore files into."),
     threads: int = typer.Option(3, "-t", "--threads", help="Parallel threads."),
-    password: Optional[str] = typer.Option(
+    password: str | None = typer.Option(
         None, "-p", "--password", envvar="PMOLE_PASSWORD", help=_PASSWORD_HELP
     ),
 ):
@@ -162,16 +200,16 @@ def decompress(
 
     try:
         paths = api_decompress(archive, output_dir=output_dir, threads=threads, password=password)
-        logger.info(f"Restored {len(paths)} file(s) to '{output_dir}'.")
+        logger.info(f"done  →  {len(paths)} file(s) in '{output_dir}'")
     except (FileNotFoundError, ValueError) as e:
         logger.error(str(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @cli.command(name="list")
 def list_files(
     archive: str = typer.Argument(..., help="Path to the .pm archive."),
-    password: Optional[str] = typer.Option(
+    password: str | None = typer.Option(
         None, "-p", "--password", envvar="PMOLE_PASSWORD", help=_PASSWORD_HELP
     ),
 ):
@@ -184,10 +222,10 @@ def list_files(
         entries = api_list_files(archive, password=password)
     except (FileNotFoundError, ValueError) as e:
         logger.error(str(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     if not entries:
-        logger.info("Archive is empty or invalid.")
+        logger.info("empty or invalid archive")
         return
 
     for e in entries:
@@ -204,7 +242,7 @@ def extract(
     archive: str = typer.Argument(..., help="Path to the .pm archive."),
     target: str = typer.Argument(..., help="Archived path of the file to extract."),
     output_dir: str = typer.Argument(".", help="Directory to extract the file into."),
-    password: Optional[str] = typer.Option(
+    password: str | None = typer.Option(
         None, "-p", "--password", envvar="PMOLE_PASSWORD", help=_PASSWORD_HELP
     ),
 ):
@@ -218,14 +256,14 @@ def extract(
         logger.info(f"Extracted '{target}' → '{out}'")
     except (FileNotFoundError, ValueError) as e:
         logger.error(str(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
 
 @cli.command()
 def verify(
     archive: str = typer.Argument(..., help="Path to the .pm archive."),
     threads: int = typer.Option(3, "-t", "--threads", help="Parallel threads."),
-    password: Optional[str] = typer.Option(
+    password: str | None = typer.Option(
         None, "-p", "--password", envvar="PMOLE_PASSWORD", help=_PASSWORD_HELP
     ),
 ):
@@ -241,7 +279,7 @@ def verify(
         results = api_verify(archive, threads=threads, password=password)
     except (FileNotFoundError, ValueError) as e:
         logger.error(str(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     failures = [r for r in results if not r["ok"]]
     for r in results:
@@ -253,7 +291,7 @@ def verify(
         logger.error(f"{len(failures)} file(s) failed verification.")
         raise typer.Exit(1)
     else:
-        logger.info(f"All {len(results)} file(s) verified OK.")
+        logger.info(f"ok  →  all {len(results)} file(s) verified")
 
 
 @cli.command()
@@ -261,7 +299,7 @@ def search(
     archive: str = typer.Argument(..., help="Path to the .pm archive."),
     pattern: str = typer.Argument(..., help="Regex pattern to search for."),
     threads: int = typer.Option(3, "-t", "--threads", help="Parallel threads."),
-    password: Optional[str] = typer.Option(
+    password: str | None = typer.Option(
         None, "-p", "--password", envvar="PMOLE_PASSWORD", help=_PASSWORD_HELP
     ),
 ):
@@ -277,19 +315,19 @@ def search(
         matches = api_search(archive, pattern=pattern, threads=threads, password=password)
     except (FileNotFoundError, ValueError) as e:
         logger.error(str(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     for m in matches:
         print(f"{m['path']}:{m['line_no']}: {m['line']}")
 
     if not matches:
-        logger.info("No matches found.")
+        logger.info("no matches found")
 
 
 @cli.command()
 def stats(
     archive: str = typer.Argument(..., help="Path to the .pm archive."),
-    password: Optional[str] = typer.Option(
+    password: str | None = typer.Option(
         None, "-p", "--password", envvar="PMOLE_PASSWORD", help=_PASSWORD_HELP
     ),
 ):
@@ -302,7 +340,7 @@ def stats(
         data = api_stats(archive, password=password)
     except (FileNotFoundError, ValueError) as e:
         logger.error(str(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     by_ext = data["by_extension"]
     # Sort by original size descending
@@ -335,7 +373,7 @@ def stats(
 @cli.command()
 def tree(
     archive: str = typer.Argument(..., help="Path to the .pm archive."),
-    password: Optional[str] = typer.Option(
+    password: str | None = typer.Option(
         None, "-p", "--password", envvar="PMOLE_PASSWORD", help=_PASSWORD_HELP
     ),
 ):
@@ -348,10 +386,10 @@ def tree(
         entries = api_list_files(archive, password=password)
     except (FileNotFoundError, ValueError) as e:
         logger.error(str(e))
-        raise typer.Exit(1)
+        raise typer.Exit(1) from e
 
     if not entries:
-        logger.info("Archive is empty or invalid.")
+        logger.info("empty or invalid archive")
         return
 
     paths = [e.path for e in entries]
@@ -372,15 +410,18 @@ def diff(
         logger.error(f"Path '{file2}' does not exist.")
         raise typer.Exit(1)
 
-    text1 = open(file1, "r").read()
-    text2 = open(file2, "r").read()
+    with open(file1) as fh:
+        text1 = fh.read()
+    with open(file2) as fh:
+        text2 = fh.read()
 
     diff_lines = show_diff(text1.splitlines(True), text2.splitlines(True), file1, file2)
-    logger.info(f"Diff: {file1} vs {file2}")
+    logger.info(f"diff  {file1}  vs  {file2}")
     for line in diff_lines:
         print(line)
 
 
 def run() -> None:
+    configure_logging()
     setup_cli_dir()
     cli()

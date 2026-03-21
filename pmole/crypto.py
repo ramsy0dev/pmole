@@ -34,9 +34,9 @@ Offset  Size  Field
 
 import os
 
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes
 
 _ENC_MAGIC        = b"PME\x01"
 _SALT_SIZE        = 16
@@ -83,4 +83,4 @@ def decrypt_archive(data: bytes, password: str) -> bytes:
     try:
         return AESGCM(key).decrypt(nonce, ciphertext, None)
     except Exception:
-        raise ValueError("Incorrect password or corrupted archive.")
+        raise ValueError("Incorrect password or corrupted archive.") from None

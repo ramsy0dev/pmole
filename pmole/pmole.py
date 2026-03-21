@@ -36,21 +36,20 @@ from pathlib import Path
 import pathspec
 from loguru import logger
 
-from pmole.crypto import _ENC_MAGIC, encrypt_archive, decrypt_archive
-from pmole.file_handler import FileHandler
 from pmole.compression import (
     ALGO_NAMES,
+    compress_auto,
     compress_with_algo,
     decompress_with_algo,
-    compress_auto,
 )
-from pmole.utils import measure_time, list_files_in_directory
+from pmole.crypto import _ENC_MAGIC, decrypt_archive, encrypt_archive
 from pmole.globals import (
     EXCLUDE_DIRECTORIES,
     EXCLUDE_EXTENSIONS,
     EXCLUDE_FILENAMES,
     MAX_FILE_SIZE_BYTES,
 )
+from pmole.utils import list_files_in_directory, measure_time
 
 # ── Format constants ────────────────────────────────────────────────────────
 PM_MAGIC       = b"PM\x03\x00"
@@ -76,7 +75,7 @@ def _load_ignore_spec(directory: str):
             try:
                 lines = ignore_file.read_text(encoding="utf-8", errors="ignore").splitlines()
                 spec = pathspec.PathSpec.from_lines("gitignore", lines)
-                logger.info(f"Loaded ignore patterns from '{ignore_file}'.")
+                logger.info(f"ignore spec  '{ignore_file}'")
                 return spec
             except Exception as exc:
                 logger.warning(f"Could not parse '{ignore_file}': {exc}")
@@ -126,8 +125,9 @@ def _compress_file_task(fp: str, algo: int | None) -> tuple:
     Runs in a thread pool; zlib/lzma release the GIL so threads parallelize.
     """
     orig_size = os.path.getsize(fp)
-    is_binary = b"\x00" in open(fp, "rb").read(8192)
-    data      = b"".join(FileHandler(fp).read(threads=1))
+    with open(fp, "rb") as fh:
+        is_binary = b"\x00" in fh.read(8192)
+    data = Path(fp).read_bytes()
 
     if algo is None:
         chosen_algo, compressed = compress_auto(data)
@@ -136,8 +136,7 @@ def _compress_file_task(fp: str, algo: int | None) -> tuple:
         compressed  = compress_with_algo(data, algo)
 
     logger.info(
-        f"Compressed '{fp}': {orig_size} B → {len(compressed)} B "
-        f"({ALGO_NAMES[chosen_algo]})"
+        f"pack  {fp}  {orig_size} B → {len(compressed)} B  [{ALGO_NAMES[chosen_algo]}]"
     )
     return (fp, orig_size, is_binary, chosen_algo, compressed)
 
@@ -157,10 +156,12 @@ def _decompress_file_task(
     decompressed = decompress_with_algo(compressed_bytes, entry["algo"])
 
     path_parts = entry["path"].split("/")
-    out_path   = str(Path(output_dir) / Path(*path_parts))
-    FileHandler(out_path).write_binary(decompressed)
-    logger.info(f"Decompressed '{entry['path']}' → '{out_path}'")
-    return out_path
+    out_path   = Path(output_dir) / Path(*path_parts)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(decompressed)
+    out_str = str(out_path)
+    logger.info(f"unpack  {entry['path']}  →  {out_str}")
+    return out_str
 
 
 def _verify_file_task(pm_file_path: str, entry: dict) -> dict:
@@ -222,7 +223,7 @@ def _read_index(f) -> list[dict]:
     """Read and return the index from an open ``.pm`` file handle."""
     magic = f.read(4)
     if magic != PM_MAGIC:
-        logger.error(f"Invalid .pm file: expected {PM_MAGIC!r}, got {magic!r}")
+        logger.error(f"invalid archive: expected magic {PM_MAGIC!r}, got {magic!r}")
         return []
 
     _file_count, index_offset = struct.unpack("<IQ", f.read(12))
@@ -300,7 +301,10 @@ class PMFileWriter:
             norm_path  = path.replace("\\", "/")
             path_bytes = norm_path.encode("utf-8")
             self._file.write(
-                struct.pack(_INDEX_ENTRY_FMT, data_offset, orig_size, compr_size, is_bin, algo, len(path_bytes))
+                struct.pack(
+                    _INDEX_ENTRY_FMT,
+                    data_offset, orig_size, compr_size, is_bin, algo, len(path_bytes),
+                )
             )
             self._file.write(path_bytes)
 
@@ -343,9 +347,15 @@ class Pmole:
 
         Returns the path of the created archive.
         """
-        exc_dirs  = exclude_directories if exclude_directories is not None else list(EXCLUDE_DIRECTORIES)
-        exc_exts  = exclude_extensions  if exclude_extensions  is not None else list(EXCLUDE_EXTENSIONS)
-        exc_names = exclude_filenames   if exclude_filenames   is not None else list(EXCLUDE_FILENAMES)
+        exc_dirs = (
+            exclude_directories if exclude_directories is not None else list(EXCLUDE_DIRECTORIES)
+        )
+        exc_exts = (
+            exclude_extensions if exclude_extensions is not None else list(EXCLUDE_EXTENSIONS)
+        )
+        exc_names = (
+            exclude_filenames if exclude_filenames is not None else list(EXCLUDE_FILENAMES)
+        )
         max_size  = max_file_size_bytes if max_file_size_bytes is not None else MAX_FILE_SIZE_BYTES
 
         if directory_path is not None:
@@ -366,7 +376,7 @@ class Pmole:
                         Path(fp).relative_to(base).as_posix()
                     )
                 ]
-            logger.info(f"Found {len(files_paths)} files.")
+            logger.info(f"scan  {len(files_paths)} source files")
             default_name = Path(directory_path).name + ".pm"
         else:
             files_paths  = [file_path]
@@ -396,9 +406,9 @@ class Pmole:
                 plain = f.read()
             with open(output_file_name, "wb") as f:
                 f.write(encrypt_archive(plain, password))
-            logger.info("Archive encrypted with AES-256-GCM.")
+            logger.info("encrypt  AES-256-GCM")
 
-        logger.info(f"Done. Archive: '{output_file_name}'.")
+        logger.info(f"wrote  {output_file_name}")
         return output_file_name
 
     @measure_time
@@ -423,14 +433,13 @@ class Pmole:
             with ThreadPoolExecutor(max_workers=threads) as executor:
                 written = list(executor.map(task, entries))
 
-        logger.info(f"Decompression complete. {len(written)} files restored.")
+        logger.info(f"restored  {len(written)} file(s)")
         return written
 
     def list_files(self, pm_file_path: str, password: str | None = None) -> list[dict]:
         """Return index metadata for all files (no data sections read)."""
-        with _open_pm(pm_file_path, password) as effective_path:
-            with open(effective_path, "rb") as f:
-                return _read_index(f)
+        with _open_pm(pm_file_path, password) as effective_path, open(effective_path, "rb") as f:
+            return _read_index(f)
 
     def extract(
         self,
@@ -455,7 +464,7 @@ class Pmole:
 
             out_path = _decompress_file_task(effective_path, entry, output_dir)
 
-        logger.info(f"Extracted '{target_path}' → '{out_path}'.")
+        logger.info(f"extract  {target_path}  →  {out_path}")
         return out_path
 
     def verify(
@@ -480,7 +489,7 @@ class Pmole:
                 results = list(executor.map(task, entries))
 
         ok_count = sum(1 for r in results if r["ok"])
-        logger.info(f"Verified {ok_count}/{len(results)} files OK.")
+        logger.info(f"verified  {ok_count}/{len(results)} OK")
         return results
 
     def search(
@@ -507,5 +516,5 @@ class Pmole:
                 per_file = list(executor.map(task, entries))
 
         matches = [m for file_matches in per_file for m in file_matches]
-        logger.info(f"Found {len(matches)} match(es) for '{pattern}'.")
+        logger.info(f"search  {len(matches)} match(es) for '{pattern}'")
         return matches

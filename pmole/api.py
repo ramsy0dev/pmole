@@ -72,16 +72,16 @@ __all__ = [
 from dataclasses import dataclass
 from pathlib import Path
 
-from pmole.pmole import Pmole
-from pmole.lzw import LZW
-from pmole.compression import ALGO_LZW, ALGO_LZW_ZLIB, ALGO_ZLIB, ALGO_LZMA, ALGO_NAMES
+from pmole.compression import ALGO_LZMA, ALGO_LZW, ALGO_LZW_ZLIB, ALGO_NAMES, ALGO_ZLIB
 from pmole.crypto import _ENC_MAGIC
 from pmole.globals import (
-    EXCLUDE_EXTENSIONS,
     EXCLUDE_DIRECTORIES,
+    EXCLUDE_EXTENSIONS,
     EXCLUDE_FILENAMES,
     MAX_FILE_SIZE_BYTES,
 )
+from pmole.lzw import LZW
+from pmole.pmole import Pmole
 
 # Map string names accepted by the public API to internal algorithm IDs.
 _ALGO_BY_NAME: dict[str, int] = {
@@ -187,22 +187,28 @@ def compress(
         raise FileNotFoundError(f"Path not found: {path}")
 
     resolved_algo = _resolve_algo(algo)
-    exc_ext   = exclude_extensions   if exclude_extensions   is not None else list(EXCLUDE_EXTENSIONS)
-    exc_dir   = exclude_directories  if exclude_directories  is not None else list(EXCLUDE_DIRECTORIES)
-    exc_names = exclude_filenames    if exclude_filenames    is not None else list(EXCLUDE_FILENAMES)
-    max_size  = max_file_size_bytes  if max_file_size_bytes  is not None else MAX_FILE_SIZE_BYTES
+    exc_ext = (
+        exclude_extensions if exclude_extensions is not None else list(EXCLUDE_EXTENSIONS)
+    )
+    exc_dir = (
+        exclude_directories if exclude_directories is not None else list(EXCLUDE_DIRECTORIES)
+    )
+    exc_names = (
+        exclude_filenames if exclude_filenames is not None else list(EXCLUDE_FILENAMES)
+    )
+    max_size = max_file_size_bytes if max_file_size_bytes is not None else MAX_FILE_SIZE_BYTES
 
     pmole_obj = Pmole()
-    kwargs = dict(
-        output_path=output,
-        algo=resolved_algo,
-        threads=threads,
-        password=password,
-        exclude_extensions=exc_ext,
-        exclude_directories=exc_dir,
-        exclude_filenames=exc_names,
-        max_file_size_bytes=max_size,
-    )
+    kwargs = {
+        "output_path": output,
+        "algo": resolved_algo,
+        "threads": threads,
+        "password": password,
+        "exclude_extensions": exc_ext,
+        "exclude_directories": exc_dir,
+        "exclude_filenames": exc_names,
+        "max_file_size_bytes": max_size,
+    }
     if p.is_file():
         return pmole_obj.compress(file_path=str(p), **kwargs)
     return pmole_obj.compress(directory_path=str(p), **kwargs)

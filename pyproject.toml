@@ -11,13 +11,13 @@ python = ">=3.10,<4.0"
 loguru = "^0.7.3"
 typer = "^0.15.3"
 pytest = "^9.0.2"
-wcwidth = "^0.2.14"
 cryptography = ">=42.0"
 pathspec = ">=0.11"
 
 
 [tool.poetry.group.dev.dependencies]
 debugpy = "^1.8.14"
+ruff = ">=0.15"
 
 [build-system]
 requires = ["poetry-core"]
@@ -30,6 +30,12 @@ pmole = "pmole:cli.run"
 dev = [
     "basedpyright", # you can pin the version here if you want, or just rely on the lockfile
 ]
+
+[tool.ruff]
+line-length = 99
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
 
 [tool.basedpyright]
 # many settings are not enabled even in strict mode, which is why basedpyright includes an "all" option
