@@ -175,3 +175,6 @@ cython_debug/
 
 # Pmole compress output file extensions
 *.pm
+
+# Claude Code local settings
+.claude/
